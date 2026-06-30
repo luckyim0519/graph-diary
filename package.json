@@ -1,0 +1,14 @@
+{
+  "name": "graph-diary",
+  "version": "1.0.0",
+  "description": "A personal diary with Obsidian-style graph-linked notes",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^42.5.0"
+  }
+}

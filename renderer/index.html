@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>Graph Diary</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Sidebar: categories and notes -->
+      <aside id="sidebar">
+        <div class="sidebar-head">
+          <h1>📓 Graph Diary</h1>
+        </div>
+        <div class="sidebar-actions">
+          <button id="new-note-btn" title="New note">+ Note</button>
+          <button id="new-cat-btn" title="New category">+ Category</button>
+        </div>
+        <div id="tree"></div>
+        <div class="sidebar-foot">
+          <span id="vault-path" title=""></span>
+        </div>
+      </aside>
+
+      <!-- Main pane: editor or graph -->
+      <main id="main">
+        <header id="toolbar">
+          <div class="tabs">
+            <button id="tab-editor" class="tab active">✎ Editor</button>
+            <button id="tab-graph" class="tab">🕸 Graph</button>
+            <button id="tab-mood" class="tab">💗 Mood</button>
+          </div>
+          <div class="tool-right">
+            <span id="save-state"></span>
+            <button id="delete-note-btn" title="Delete current note">🗑</button>
+          </div>
+        </header>
+
+        <!-- Editor view -->
+        <section id="editor-view" class="view">
+          <div id="note-meta">
+            <span id="note-title">No note selected</span>
+            <span id="note-cat" class="pill"></span>
+            <span class="theme-field">
+              <label for="note-theme">🏷 Theme</label>
+              <input id="note-theme" list="theme-list" placeholder="e.g. canada" />
+              <datalist id="theme-list"></datalist>
+            </span>
+            <span class="theme-field">
+              <label for="note-subtheme">↳ Sub-theme</label>
+              <input id="note-subtheme" list="subtheme-list" placeholder="e.g. PEY" />
+              <datalist id="subtheme-list"></datalist>
+            </span>
+          </div>
+          <div id="note-keywords" title="Auto-summarized keywords (written to the file header)"></div>
+          <div id="editor-wrap">
+            <textarea
+              id="editor"
+              spellcheck="true"
+              placeholder="Start writing… use [[Note Name]] to link to another note."
+            ></textarea>
+            <div id="autocomplete" class="hidden"></div>
+          </div>
+        </section>
+
+        <!-- Graph view -->
+        <section id="graph-view" class="view hidden">
+          <canvas id="graph-canvas"></canvas>
+          <div id="graph-legend"></div>
+        </section>
+
+        <!-- Mood / emotional arc view -->
+        <section id="mood-view" class="view hidden">
+          <div id="mood-bar">
+            <div id="mood-engine" class="mood-engine"></div>
+            <button id="mood-refresh">↻ Re-analyze all</button>
+          </div>
+          <div id="mood-chart-wrap">
+            <canvas id="mood-canvas"></canvas>
+            <div id="mood-tooltip" class="hidden"></div>
+          </div>
+          <div id="mood-summary"></div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Lightweight modal -->
+    <div id="modal" class="hidden">
+      <div class="modal-box">
+        <h3 id="modal-title"></h3>
+        <select id="modal-select" class="hidden"></select>
+        <input id="modal-input" type="text" />
+        <div class="modal-actions">
+          <button id="modal-cancel">Cancel</button>
+          <button id="modal-ok" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="graph.js"></script>
+    <script src="mood.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
