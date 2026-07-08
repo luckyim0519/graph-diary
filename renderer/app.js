@@ -230,8 +230,6 @@ async function saveCurrent() {
   const m = editor.value.match(/^#\s+(.+)$/m);
   note.title = m ? m[1].trim() : note.slug;
   noteTitle.textContent = note.title;
-  note.mood = null;        // body changed → mood is stale until re-analyzed
-  moodLoaded = false;      // re-run analysis next time the Mood tab opens
   dirty = false;
   saveState.textContent = 'saved ✓';
   renderTree();
@@ -496,7 +494,7 @@ function renderLegend() {
 
 // ---- Tabs -----------------------------------------------------------------
 function switchTab(which) {
-  for (const t of ['editor', 'graph', 'mood']) {
+  for (const t of ['editor', 'graph', 'posts']) {
     $('tab-' + t).classList.toggle('active', which === t);
     $(t + '-view').classList.toggle('hidden', which !== t);
   }
@@ -507,95 +505,12 @@ function switchTab(which) {
   } else {
     graph.stop();
   }
-  if (which === 'mood') openMood();
+  if (which === 'posts') renderPosts(notes, categories);
 }
 
 $('tab-editor').onclick = () => switchTab('editor');
 $('tab-graph').onclick = () => switchTab('graph');
-$('tab-mood').onclick = () => switchTab('mood');
-
-// ---- Mood / emotional arc -------------------------------------------------
-let moodChart;
-let moodLoaded = false;
-
-async function openMood() {
-  const status = await window.api.ollamaStatus();
-  $('mood-engine').innerHTML = status.reachable
-    ? `Analysis engine: <b>Ollama (${status.model})</b> · local & private`
-    : 'Analysis engine: <b>built-in</b> · install Ollama for richer insight';
-  moodChart.resize();
-  if (!moodLoaded) {
-    await runMoodAnalysis(false); // analyze only entries missing a mood
-    moodLoaded = true;
-  } else {
-    renderMood();
-  }
-}
-
-async function runMoodAnalysis(force) {
-  $('mood-engine').innerHTML += ' · <i>analyzing…</i>';
-  const results = await window.api.analyzeMoods(force);
-  const byId = new Map(results.map((r) => [r.id, r]));
-  for (const n of notes) {
-    const r = byId.get(n.id);
-    if (r) { n.mood = r.mood; n.emotions = r.emotions; }
-  }
-  await openMoodStatus();
-  renderMood();
-}
-
-async function openMoodStatus() {
-  const status = await window.api.ollamaStatus();
-  $('mood-engine').innerHTML = status.reachable
-    ? `Analysis engine: <b>Ollama (${status.model})</b> · local & private`
-    : 'Analysis engine: <b>built-in</b> · install Ollama for richer insight';
-}
-
-function renderMood() {
-  const points = notes
-    .filter((n) => typeof n.mood === 'number')
-    .map((n) => ({
-      id: n.id, title: n.title, date: n.date, mood: n.mood,
-      category: n.category, color: colorFor(n.category), emotions: n.emotions || [],
-    }));
-  moodChart.setData(points);
-  renderMoodSummary(points);
-}
-
-function renderMoodSummary(points) {
-  const box = $('mood-summary');
-  if (!points.length) { box.innerHTML = ''; return; }
-  const avg = points.reduce((s, p) => s + p.mood, 0) / points.length;
-  const best = points.reduce((a, b) => (b.mood > a.mood ? b : a));
-  const worst = points.reduce((a, b) => (b.mood < a.mood ? b : a));
-
-  // which themes/keywords track your best vs worst days
-  const tag = (sel) => {
-    const freq = {};
-    for (const p of points) {
-      if (!sel(p.mood)) continue;
-      const note = notes.find((n) => n.id === p.id);
-      for (const k of (note.keywords || [])) freq[k] = (freq[k] || 0) + 1;
-      if (note.theme) freq[note.theme] = (freq[note.theme] || 0) + 1;
-    }
-    return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
-  };
-  const highTags = tag((m) => m > 0);
-  const lowTags = tag((m) => m < 0);
-
-  const card = (label, value, sub) =>
-    `<div class="mood-card"><div class="mc-label">${label}</div>` +
-    `<div class="mc-value">${value}</div><div class="mc-sub">${sub}</div></div>`;
-
-  box.innerHTML =
-    card('Average mood', (avg > 0 ? '+' : '') + avg.toFixed(1), `${points.length} entries`) +
-    card('Best day', `${best.mood > 0 ? '+' : ''}${best.mood}`, `${best.title} · ${best.date}`) +
-    card('Lowest day', `${worst.mood}`, `${worst.title} · ${worst.date}`) +
-    card('On good days', highTags.join(', ') || '—', 'common themes') +
-    card('On hard days', lowTags.join(', ') || '—', 'common themes');
-}
-
-$('mood-refresh').onclick = () => runMoodAnalysis(true);
+$('tab-posts').onclick = () => switchTab('posts');
 
 // ---- Modal helper ---------------------------------------------------------
 function modal({ title, withSelect, options, placeholder }) {
@@ -879,12 +794,10 @@ $('backup-btn').onclick = async () => {
 // ---- Init -----------------------------------------------------------------
 window.addEventListener('resize', () => {
   if (graph) graph.resize();
-  if (moodChart) moodChart.resize();
 });
 
 (async function init() {
   graph = new GraphView($('graph-canvas'), (id) => openNote(id));
-  moodChart = new MoodChart($('mood-canvas'), $('mood-tooltip'), (id) => openNote(id));
   await refresh();
   const first = notes[0];
   if (first) openNote(first.id);

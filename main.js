@@ -150,12 +150,6 @@ function composeFile(body, meta = {}) {
   if (meta.date) lines.push(`date: ${meta.date}`);
   lines.push(`theme: ${meta.theme || ''}`);
   lines.push(`subtheme: ${meta.subtheme || ''}`);
-  if (meta.mood !== undefined && meta.mood !== null && meta.mood !== '') {
-    lines.push(`mood: ${meta.mood}`);
-  }
-  if (meta.emotions && meta.emotions.length) {
-    lines.push(`emotions: ${meta.emotions.join(', ')}`);
-  }
   lines.push(`keywords: ${(meta.keywords || []).join(', ')}`);
   lines.push('---', '', clean);
   return lines.join('\n');
@@ -165,109 +159,6 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// ---- Mood analysis (local) ------------------------------------------------
-// Tries a local Ollama model first; falls back to an offline lexicon so the
-// feature works with no setup. Either way nothing leaves the machine.
-
-const OLLAMA_URL = 'http://localhost:11434';
-const MOOD_MODEL = process.env.GD_OLLAMA_MODEL || 'qwen2.5';
-
-// Substring-matched sentiment cues (Korean conjugates, so match stems).
-const POS_CUES = (
-  'happy glad grateful thankful calm peace peaceful love loved hope hopeful ' +
-  'excited joy joyful proud relaxed content satisfied better good great wonderful ' +
-  '좋 행복 기쁘 기뻐 감사 고마 사랑 평화 평온 차분 설레 설렘 만족 희망 뿌듯 기대 ' +
-  '신나 즐거 편안 안심 웃 다행'
-).split(/\s+/);
-const NEG_CUES = (
-  'sad angry anger anxious anxiety afraid fear scared lonely alone tired exhausted ' +
-  'hate hated regret worried worry stress stressed depressed upset hurt frustrated ' +
-  'awful terrible bad worse cry crying ' +
-  '슬프 슬퍼 화 분노 짜증 불안 두렵 무섭 우울 외롭 힘들 지치 지쳐 미워 싫 후회 ' +
-  '걱정 스트레스 상처 눈물 울 답답 괴로 절망 부담 아프'
-).split(/\s+/);
-
-const EMOTION_CUES = {
-  happy: ['happy', 'joy', 'glad', '행복', '기쁘', '기뻐', '즐거', '신나'],
-  grateful: ['grateful', 'thankful', '감사', '고마', '다행'],
-  calm: ['calm', 'peace', 'relaxed', '평온', '차분', '편안', '안심'],
-  hopeful: ['hope', 'excited', '희망', '기대', '설레'],
-  anxious: ['anxious', 'anxiety', 'worried', 'nervous', '불안', '걱정', '초조'],
-  sad: ['sad', 'cry', 'depressed', 'lonely', '슬프', '슬퍼', '우울', '외롭', '눈물', '울'],
-  angry: ['angry', 'anger', 'hate', 'frustrated', '화', '분노', '짜증', '미워', '싫'],
-  tired: ['tired', 'exhausted', 'stress', '힘들', '지치', '지쳐', '스트레스', '답답'],
-};
-
-function lexiconMood(text) {
-  const t = text.toLowerCase();
-  let pos = 0, neg = 0;
-  for (const w of POS_CUES) if (w && t.includes(w)) pos++;
-  for (const w of NEG_CUES) if (w && t.includes(w)) neg++;
-  const total = pos + neg;
-  // map to -5..+5
-  const score = total === 0 ? 0 : Math.round(((pos - neg) / total) * 5);
-  const emotions = [];
-  for (const [emo, cues] of Object.entries(EMOTION_CUES)) {
-    if (cues.some((c) => t.includes(c))) emotions.push(emo);
-  }
-  return { mood: score, emotions: emotions.slice(0, 3), engine: 'lexicon' };
-}
-
-async function ollamaMood(text) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
-  try {
-    const prompt =
-      'You analyze a personal diary entry (Korean or English). Respond ONLY with ' +
-      'JSON: {"mood": <integer -5..5>, "emotions": [up to 3 lowercase english tags]}. ' +
-      'mood -5 = very negative, 0 = neutral, 5 = very positive.\n\nEntry:\n' + text;
-    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: MOOD_MODEL, prompt, stream: false, format: 'json' }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error('ollama ' + res.status);
-    const data = await res.json();
-    const parsed = JSON.parse(data.response);
-    let mood = Math.round(Number(parsed.mood));
-    if (Number.isNaN(mood)) throw new Error('bad mood');
-    mood = Math.max(-5, Math.min(5, mood));
-    const emotions = Array.isArray(parsed.emotions)
-      ? parsed.emotions.map((e) => String(e).toLowerCase().trim()).filter(Boolean).slice(0, 3)
-      : [];
-    return { mood, emotions, engine: 'ollama' };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-let ollamaOk = null; // cache reachability per session
-async function ollamaReachable() {
-  if (ollamaOk !== null) return ollamaOk;
-  try {
-    const c = new AbortController();
-    const t = setTimeout(() => c.abort(), 1500);
-    const r = await fetch(`${OLLAMA_URL}/api/tags`, { signal: c.signal });
-    clearTimeout(t);
-    ollamaOk = r.ok;
-  } catch {
-    ollamaOk = false;
-  }
-  return ollamaOk;
-}
-
-async function analyzeMood(text) {
-  if (!text || !text.trim()) return { mood: 0, emotions: [], engine: 'empty' };
-  if (await ollamaReachable()) {
-    try {
-      return await ollamaMood(text);
-    } catch {
-      ollamaOk = null; // re-check next time
-    }
-  }
-  return lexiconMood(text);
-}
 
 async function ensureVault() {
   await fsp.mkdir(VAULT, { recursive: true });
@@ -427,34 +318,6 @@ ipcMain.handle('note:create', async (_e, { category, title, theme, subtheme }) =
     }), 'utf8');
   }
   return `${category}/${file}`;
-});
-
-// ---- Mood IPC -------------------------------------------------------------
-
-ipcMain.handle('ollama:status', async () => ({
-  reachable: await ollamaReachable(), model: MOOD_MODEL,
-}));
-
-// Analyze every entry missing a mood (or all of them if force=true), write the
-// result into each header, and return [{ id, mood, emotions, engine }].
-ipcMain.handle('moods:analyze', async (_e, { force } = {}) => {
-  ollamaOk = null; // re-check Ollama at the start of each batch
-  const notes = await listNotes();
-  const results = [];
-  for (const n of notes) {
-    if (!force && n.mood !== null && n.mood !== undefined) {
-      results.push({ id: n.id, mood: n.mood, emotions: n.emotions, engine: 'cached' });
-      continue;
-    }
-    const { mood, emotions, engine } = await analyzeMood(n.content);
-    const full = path.join(VAULT, n.id);
-    const prev = existingMeta(full);
-    fs.writeFileSync(full, composeFile(n.content, {
-      ...prev, keywords: prev.keywords || n.keywords, mood, emotions,
-    }), 'utf8');
-    results.push({ id: n.id, mood, emotions, engine });
-  }
-  return results;
 });
 
 // Move a note to a different category (drag & drop). This renames the file;

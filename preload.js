@@ -16,8 +16,6 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('note:reclassify', { id, category, theme, subtheme }),
   createCategory: (name) => ipcRenderer.invoke('category:create', { name }),
   vaultPath: () => ipcRenderer.invoke('vault:path'),
-  ollamaStatus: () => ipcRenderer.invoke('ollama:status'),
-  analyzeMoods: (force) => ipcRenderer.invoke('moods:analyze', { force }),
   backup: () => ipcRenderer.invoke('backup:run'),
   saveAttachment: (category, data, filename, mimeType) =>
     ipcRenderer.invoke('attachment:save', { category, data, filename, mimeType }),
