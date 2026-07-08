@@ -318,7 +318,7 @@ async function listNotes() {
   const notes = [];
   const cats = await fsp.readdir(VAULT, { withFileTypes: true });
   for (const cat of cats) {
-    if (!cat.isDirectory()) continue;
+    if (!cat.isDirectory() || cat.name.startsWith('.')) continue; // skip .trash etc.
     const dir = path.join(VAULT, cat.name);
     const files = await fsp.readdir(dir, { withFileTypes: true });
     for (const f of files) {
@@ -362,7 +362,9 @@ ipcMain.handle('notes:list', () => listNotes());
 ipcMain.handle('categories:list', async () => {
   await ensureVault();
   const cats = await fsp.readdir(VAULT, { withFileTypes: true });
-  return cats.filter((c) => c.isDirectory()).map((c) => c.name);
+  return cats
+    .filter((c) => c.isDirectory() && !c.name.startsWith('.'))
+    .map((c) => c.name);
 });
 
 // Reads the existing header of a note (to preserve date across saves).
@@ -376,12 +378,12 @@ function existingMeta(full) {
 
 // Saving re-derives keywords from the body and clears the cached mood (the body
 // changed, so it must be re-analyzed). The entry's date is preserved.
-ipcMain.handle('note:save', async (_e, { id, content, theme, subtheme }) => {
+ipcMain.handle('note:save', async (_e, { id, content, theme, subtheme, date }) => {
   const full = path.join(VAULT, id);
   const prev = existingMeta(full);
   const keywords = extractKeywords(content);
   await fsp.writeFile(full, composeFile(content, {
-    date: prev.date || today(), theme: theme || '', subtheme: subtheme || '',
+    date: date || prev.date || today(), theme: theme || '', subtheme: subtheme || '',
     keywords, mood: null, emotions: [],
   }), 'utf8');
   return { keywords };
@@ -389,13 +391,13 @@ ipcMain.handle('note:save', async (_e, { id, content, theme, subtheme }) => {
 
 // Synchronous save — used when the window is closing, so the write completes
 // before the app exits and nothing typed is ever lost.
-ipcMain.on('note:save-sync', (e, { id, content, theme, subtheme }) => {
+ipcMain.on('note:save-sync', (e, { id, content, theme, subtheme, date }) => {
   try {
     const full = path.join(VAULT, id);
     const prev = existingMeta(full);
     const keywords = extractKeywords(content);
     fs.writeFileSync(full, composeFile(content, {
-      date: prev.date || today(), theme: theme || '', subtheme: subtheme || '',
+      date: date || prev.date || today(), theme: theme || '', subtheme: subtheme || '',
       keywords, mood: null, emotions: [],
     }), 'utf8');
     e.returnValue = { ok: true };
@@ -448,8 +450,63 @@ ipcMain.handle('moods:analyze', async (_e, { force } = {}) => {
   return results;
 });
 
+// Move a note to a different category (drag & drop). This renames the file;
+// content/header are preserved. Never overwrites an existing note in the
+// target — collisions get a numeric suffix instead.
+ipcMain.handle('note:move', async (_e, { id, toCategory }) => {
+  const fromCategory = path.dirname(id);
+  if (fromCategory === toCategory) return id;
+  const src = path.join(VAULT, id);
+  const base = path.basename(id);
+  const destDir = path.join(VAULT, toCategory);
+  await fsp.mkdir(destDir, { recursive: true });
+  let name = base;
+  let dest = path.join(destDir, name);
+  let i = 2;
+  while (fs.existsSync(dest)) {
+    name = base.replace(/\.md$/, `-${i}.md`);
+    dest = path.join(destDir, name);
+    i++;
+  }
+  await fsp.rename(src, dest);
+  return `${toCategory}/${name}`;
+});
+
+// Reclassify a note via drag & drop onto a theme / sub-theme: optionally move
+// it to another category (file rename, collision-safe) AND set its theme /
+// subtheme header. Body, keywords, mood, date are all preserved.
+ipcMain.handle('note:reclassify', async (_e, { id, category, theme, subtheme }) => {
+  const fromCategory = path.dirname(id);
+  let dest = path.join(VAULT, id);
+  let finalId = id;
+  if (category && category !== fromCategory) {
+    const base = path.basename(id);
+    const destDir = path.join(VAULT, category);
+    await fsp.mkdir(destDir, { recursive: true });
+    let name = base, d = path.join(destDir, name), i = 2;
+    while (fs.existsSync(d)) {
+      name = base.replace(/\.md$/, `-${i}.md`); d = path.join(destDir, name); i++;
+    }
+    await fsp.rename(path.join(VAULT, id), d);
+    dest = d; finalId = `${category}/${name}`;
+  }
+  const { meta, body } = parseFrontmatter(fs.readFileSync(dest, 'utf8'));
+  if (theme !== undefined) meta.theme = theme;
+  if (subtheme !== undefined) meta.subtheme = subtheme;
+  fs.writeFileSync(dest, composeFile(body, meta), 'utf8');
+  return finalId;
+});
+
+// Soft-delete: move the note into vault/.trash/<category>/ with a timestamp
+// instead of erasing it, so it can always be recovered.
 ipcMain.handle('note:delete', async (_e, { id }) => {
-  await fsp.unlink(path.join(VAULT, id));
+  const src = path.join(VAULT, id);
+  const cat = path.dirname(id);
+  const base = path.basename(id);
+  const trashDir = path.join(VAULT, '.trash', cat);
+  await fsp.mkdir(trashDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  await fsp.rename(src, path.join(trashDir, `${stamp}__${base}`));
   return true;
 });
 
@@ -460,6 +517,66 @@ ipcMain.handle('category:create', async (_e, { name }) => {
 });
 
 ipcMain.handle('vault:path', () => VAULT);
+
+// ---- Backup (FR-5) -------------------------------------------------------
+
+const BACKUP_DRIVE = '/Volumes/Seagate';
+const BACKUP_ROOT = path.join(BACKUP_DRIVE, 'graph-diary-backups');
+const REPO_ROOT = __dirname;
+
+function countFilesSync(dir) {
+  let count = 0;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory()) count += countFilesSync(path.join(dir, e.name));
+      else count++;
+    }
+  } catch { /* skip unreadable dirs */ }
+  return count;
+}
+
+async function runBackup() {
+  if (!fs.existsSync(BACKUP_DRIVE)) {
+    return { ok: false, error: 'drive not connected' };
+  }
+  if (!fs.existsSync(VAULT)) {
+    return { ok: false, error: 'vault not found' };
+  }
+
+  const stamp = new Date().toISOString()
+    .slice(0, 19).replace('T', '-').replace(/:/g, '');
+  const snapshotDir = path.join(BACKUP_ROOT, stamp);
+  const vaultDest = path.join(snapshotDir, 'vault');
+  const repoDest = path.join(snapshotDir, 'repo');
+
+  await fsp.mkdir(vaultDest, { recursive: true });
+  await fsp.mkdir(repoDest, { recursive: true });
+
+  await fsp.cp(VAULT, vaultDest, { recursive: true });
+
+  await fsp.cp(REPO_ROOT, repoDest, {
+    recursive: true,
+    filter: (src) => {
+      const rel = path.relative(REPO_ROOT, src);
+      return !rel.startsWith('node_modules') && path.basename(src) !== '.DS_Store';
+    },
+  });
+
+  const srcCount = countFilesSync(VAULT);
+  const dstCount = countFilesSync(vaultDest);
+  if (srcCount !== dstCount) {
+    return {
+      ok: false,
+      error: `verification failed: source ${srcCount} files, backup ${dstCount}`,
+      snapshot: snapshotDir,
+    };
+  }
+
+  return { ok: true, snapshot: snapshotDir, vaultFiles: srcCount };
+}
+
+ipcMain.handle('backup:run', () => runBackup());
 
 // ---- App lifecycle --------------------------------------------------------
 

@@ -4,11 +4,13 @@
   "description": "A personal diary with Obsidian-style graph-linked notes",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "backup": "node backup.js"
   },
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^42.5.0"
+    "electron": "^42.5.0",
+    "playwright-core": "^1.61.1"
   }
 }

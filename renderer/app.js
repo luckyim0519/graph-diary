@@ -11,8 +11,15 @@ const PALETTE = [
 ];
 const catColors = {};
 function colorFor(cat) {
-  if (!catColors[cat]) {
-    catColors[cat] = PALETTE[Object.keys(catColors).length % PALETTE.length];
+  if (catColors[cat]) return catColors[cat];
+  const idx = Object.keys(catColors).length;
+  if (idx < PALETTE.length) {
+    catColors[cat] = PALETTE[idx];
+  } else {
+    // deterministic HSL from hash for 9th+ categories
+    let h = 0;
+    for (let i = 0; i < cat.length; i++) h = (h * 31 + cat.charCodeAt(i)) >>> 0;
+    catColors[cat] = `hsl(${h % 360}, 65%, 62%)`;
   }
   return catColors[cat];
 }
@@ -39,18 +46,39 @@ async function refresh() {
 
 function renderTree() {
   tree.innerHTML = '';
-  for (const cat of categories) {
-    const group = document.createElement('div');
-    group.className = 'cat-group';
+  // Top level = year (newest first), then category → theme → sub-theme.
+  const years = [...new Set(notes.map(yearOf))].sort().reverse();
+  for (const year of years) {
+    const yearGroup = document.createElement('div');
+    yearGroup.className = 'year-group';
+    const yhead = document.createElement('div');
+    yhead.className = 'year-head';
+    yhead.textContent = '📅 ' + year;
+    yearGroup.appendChild(yhead);
+
+    const yearNotes = notes.filter((n) => yearOf(n) === year);
+    for (const cat of categories) {
+      const catNotes = yearNotes.filter((n) => n.category === cat);
+      if (catNotes.length) renderCategory(yearGroup, cat, catNotes);
+    }
+    tree.appendChild(yearGroup);
+  }
+}
+
+function renderCategory(parent, cat, catNotesUnsorted) {
+  const group = document.createElement('div');
+  group.className = 'cat-group';
+  {
+    // drop on the category → move here (keeping the note's theme/sub-theme)
+    makeDropZone(group, (id) =>
+      id.startsWith(cat + '/') ? null : window.api.moveNote(id, cat));
 
     const head = document.createElement('div');
     head.className = 'cat-head';
     head.innerHTML = `<span class="cat-dot" style="background:${colorFor(cat)}"></span>${prettify(cat)}`;
     group.appendChild(head);
 
-    const catNotes = notes
-      .filter((n) => n.category === cat)
-      .sort((a, b) => a.title.localeCompare(b.title));
+    const catNotes = [...catNotesUnsorted].sort((a, b) => a.title.localeCompare(b.title));
 
     const addItem = (n, cls) => {
       const item = document.createElement('div');
@@ -58,12 +86,21 @@ function renderTree() {
         (n.id === currentId ? ' active' : '');
       item.textContent = n.title;
       item.onclick = () => openNote(n.id);
+      // make the note draggable between categories
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', n.id);
+        e.dataTransfer.effectAllowed = 'move';
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => item.classList.remove('dragging'));
       group.appendChild(item);
     };
-    const addHead = (cls, text) => {
+    const addHead = (cls, text, resolver) => {
       const h = document.createElement('div');
       h.className = cls;
       h.textContent = text;
+      if (resolver) makeDropZone(h, resolver);
       group.appendChild(h);
     };
 
@@ -73,25 +110,55 @@ function renderTree() {
     // theme sub-group → sub-theme sub-sub-group → notes
     const themes = [...new Set(catNotes.map((n) => n.theme).filter(Boolean))].sort();
     for (const th of themes) {
-      addHead('theme-head', th);
+      // drop on a theme → set this category + theme, clear sub-theme
+      addHead('theme-head', th, (id) => window.api.reclassifyNote(id, cat, th, ''));
       const themeNotes = catNotes.filter((n) => n.theme === th);
       // notes in this theme with no sub-theme
       for (const n of themeNotes.filter((n) => !n.subtheme)) addItem(n, 'themed');
       // then a sub-sub-group per sub-theme
       const subs = [...new Set(themeNotes.map((n) => n.subtheme).filter(Boolean))].sort();
       for (const sub of subs) {
-        addHead('subtheme-head', sub);
+        // drop on a sub-theme → set this category + theme + sub-theme
+        addHead('subtheme-head', sub, (id) => window.api.reclassifyNote(id, cat, th, sub));
         for (const n of themeNotes.filter((n) => n.subtheme === sub)) {
           addItem(n, 'subthemed');
         }
       }
     }
-    tree.appendChild(group);
+    parent.appendChild(group);
   }
 }
 
 function prettify(slug) {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Turn an element into a drop target. `resolver(draggedId)` returns the new id
+// (or null for a no-op). Used for category groups, theme and sub-theme headers.
+function makeDropZone(el, resolver) {
+  const isGroup = el.classList.contains('cat-group');
+  el.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drop-target');
+    // when hovering a header, don't also highlight the whole category
+    if (!isGroup) el.closest('.cat-group')?.classList.remove('drop-target');
+  });
+  el.addEventListener('dragleave', (e) => {
+    if (!el.contains(e.relatedTarget)) el.classList.remove('drop-target');
+  });
+  el.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove('drop-target');
+    const id = e.dataTransfer.getData('text/plain');
+    if (!id) return;
+    const newId = await resolver(id);
+    if (!newId) return;
+    await refresh();
+    openNote(newId);
+  });
 }
 
 // ---- Editor ---------------------------------------------------------------
@@ -107,6 +174,8 @@ async function openNote(id) {
   editor.value = note.content;
   noteTitle.textContent = note.title;
   noteCat.textContent = prettify(note.category);
+  $('note-year-input').value = /^\d{4}/.test(note.date || '') ? note.date.slice(0, 4) : '';
+  $('note-year').textContent = yearOf(note);
   $('note-theme').value = note.theme || '';
   $('note-subtheme').value = note.subtheme || '';
   renderKeywords(note.keywords);
@@ -135,14 +204,23 @@ editor.addEventListener('blur', () => {
   if (currentId && dirty) { clearTimeout(saveTimer); saveCurrent(); }
 });
 
+// The note's year is derived from its date (the top-level grouping).
+function yearOf(note) {
+  const d = note && note.date ? String(note.date) : '';
+  return /^\d{4}/.test(d) ? d.slice(0, 4) : 'undated';
+}
+
 async function saveCurrent() {
   if (!currentId) return;
   const note = notes.find((n) => n.id === currentId);
   if (!note) return;
   note.theme = $('note-theme').value.trim();
   note.subtheme = $('note-subtheme').value.trim();
+  const yr = $('note-year-input').value.trim();
+  if (yr) note.date = yr; // store the year only (e.g. "2026")
+  $('note-year').textContent = yearOf(note);
   const res = await window.api.saveNote(
-    currentId, editor.value, note.theme, note.subtheme);
+    currentId, editor.value, note.theme, note.subtheme, note.date);
   // keywords are re-derived from the body on every save
   note.keywords = (res && res.keywords) || [];
   renderKeywords(note.keywords);
@@ -165,13 +243,15 @@ window.addEventListener('beforeunload', () => {
   if (currentId && dirty) {
     window.api.saveNoteSync(
       currentId, editor.value,
-      $('note-theme').value.trim(), $('note-subtheme').value.trim());
+      $('note-theme').value.trim(), $('note-subtheme').value.trim(),
+      $('note-year-input').value.trim());
     dirty = false;
   }
 });
 
-// Editing a theme box saves immediately (so the graph re-clusters).
+// Editing a theme box / date saves immediately (so groupings re-cluster).
 $('note-theme').addEventListener('change', () => { if (currentId) saveCurrent(); });
+$('note-year-input').addEventListener('change', () => { if (currentId) saveCurrent(); });
 $('note-subtheme').addEventListener('change', () => { if (currentId) saveCurrent(); });
 
 function refreshThemeList() {
@@ -329,42 +409,41 @@ function followLink(title) {
 }
 
 // ---- Graph ----------------------------------------------------------------
-// Builds the graph under the new model:
-//  - within a category: edges from [[wiki-links]] AND from shared keywords
-//  - across categories: edges only when keywords overlap (dashed "bridges")
+let showKeywordBridges = false;
+
 function buildGraphData() {
   const byKey = new Map();
   for (const n of notes) {
     byKey.set(n.title.toLowerCase(), n);
     byKey.set(n.slug.toLowerCase(), n);
   }
-  // pairKey -> edge object, so each pair of notes yields at most one edge
   const edgeMap = new Map();
   const pairKey = (a, b) => [a, b].sort().join('|');
-  const addEdge = (aId, bId, cross, shared) => {
+  const addEdge = (aId, bId, type, shared) => {
     if (aId === bId) return;
     const key = pairKey(aId, bId);
     const existing = edgeMap.get(key);
     if (existing) {
+      if (type === 'link') existing.type = 'link'; // links take priority over keyword bridges
       if (shared) existing.shared = [...new Set([...existing.shared, ...shared])];
       return;
     }
-    edgeMap.set(key, { source: aId, target: bId, cross, shared: shared || [] });
+    edgeMap.set(key, { source: aId, target: bId, type, shared: shared || [] });
   };
 
-  // 1) [[wiki-links]] — only count links within the same category
+  // 1) [[wiki-links]] — cross-category allowed; these are first-class edges
   for (const n of notes) {
     const re = /\[\[([^\]]+)\]\]/g;
     let m;
     while ((m = re.exec(n.content))) {
       const target = byKey.get(m[1].trim().toLowerCase());
-      if (target && target.id !== n.id && target.category === n.category) {
-        addEdge(n.id, target.id, false, []);
+      if (target && target.id !== n.id) {
+        addEdge(n.id, target.id, 'link', []);
       }
     }
   }
 
-  // 2) shared keywords — within (solid) and across (bridge) categories
+  // 2) keyword bridges — secondary, require ≥2 shared keywords
   for (let i = 0; i < notes.length; i++) {
     const a = notes[i];
     const aKw = new Set(a.keywords || []);
@@ -372,22 +451,23 @@ function buildGraphData() {
     for (let j = i + 1; j < notes.length; j++) {
       const b = notes[j];
       const shared = (b.keywords || []).filter((k) => aKw.has(k));
-      if (shared.length) {
-        addEdge(a.id, b.id, a.category !== b.category, shared);
+      if (shared.length >= 2) {
+        addEdge(a.id, b.id, 'keyword', shared);
       }
     }
   }
 
   const nodes = notes.map((n) => ({
     id: n.id, title: n.title, category: n.category,
-    theme: n.theme || '', subtheme: n.subtheme || '',
+    theme: n.theme || '', subtheme: n.subtheme || '', year: yearOf(n),
   }));
   return { nodes, edges: [...edgeMap.values()] };
 }
 
 function updateGraph() {
   const { nodes, edges } = buildGraphData();
-  graph.setData(nodes, edges, catColors, categories);
+  const filtered = showKeywordBridges ? edges : edges.filter((e) => e.type !== 'keyword');
+  graph.setData(nodes, filtered, catColors, categories);
   graph.setActive(currentId);
   renderLegend();
 }
@@ -399,7 +479,17 @@ function renderLegend() {
     .join('');
   legend.innerHTML = cats +
     '<div class="legend-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' +
-    '<span style="width:18px;border-top:2px dashed #bb9af7"></span>keyword bridge</div>';
+    `<label style="display:flex;align-items:center;gap:6px;cursor:pointer">` +
+    `<input type="checkbox" id="kw-bridge-toggle"${showKeywordBridges ? ' checked' : ''}>` +
+    `<span style="width:18px;border-top:2px dashed #bb9af7;display:inline-block"></span>keyword bridges (≥2 shared)</label></div>`;
+
+  const toggle = document.getElementById('kw-bridge-toggle');
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      showKeywordBridges = toggle.checked;
+      updateGraph();
+    });
+  }
 }
 
 // ---- Tabs -----------------------------------------------------------------
@@ -568,7 +658,10 @@ async function ensureFirstCategory() {
 
 $('delete-note-btn').onclick = async () => {
   if (!currentId) return;
-  const res = await modal({ title: 'Delete this note? Type "yes" to confirm.', placeholder: 'yes' });
+  const res = await modal({
+    title: 'Move this note to Trash? (recoverable from vault/.trash) — type "yes"',
+    placeholder: 'yes',
+  });
   if (!res || res.text.toLowerCase() !== 'yes') return;
   await window.api.deleteNote(currentId);
   currentId = null;
@@ -576,6 +669,24 @@ $('delete-note-btn').onclick = async () => {
   noteTitle.textContent = 'No note selected';
   noteCat.textContent = '';
   await refresh();
+};
+
+// ---- Backup ---------------------------------------------------------------
+$('backup-btn').onclick = async () => {
+  const btn = $('backup-btn');
+  const status = $('backup-status');
+  btn.disabled = true;
+  status.textContent = 'backing up…';
+  const result = await window.api.backup();
+  btn.disabled = false;
+  if (result.ok) {
+    const snap = result.snapshot.split('/').pop();
+    status.textContent = `✓ ${result.vaultFiles} files · ${snap}`;
+    status.style.color = '#9ece6a';
+  } else {
+    status.textContent = `✗ ${result.error}`;
+    status.style.color = '#f7768e';
+  }
 };
 
 // ---- Init -----------------------------------------------------------------

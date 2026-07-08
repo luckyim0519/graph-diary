@@ -20,6 +20,10 @@
         <div id="tree"></div>
         <div class="sidebar-foot">
           <span id="vault-path" title=""></span>
+          <div class="backup-row">
+            <button id="backup-btn" title="Back up vault to Seagate drive">⇪ Back up</button>
+            <span id="backup-status"></span>
+          </div>
         </div>
       </aside>
 
@@ -41,7 +45,12 @@
         <section id="editor-view" class="view">
           <div id="note-meta">
             <span id="note-title">No note selected</span>
+            <span id="note-year" class="pill pill-year"></span>
             <span id="note-cat" class="pill"></span>
+            <span class="theme-field">
+              <label for="note-year-input">📅 Year</label>
+              <input id="note-year-input" type="number" min="1900" max="2100" step="1" placeholder="2026" />
+            </span>
             <span class="theme-field">
               <label for="note-theme">🏷 Theme</label>
               <input id="note-theme" list="theme-list" placeholder="e.g. canada" />
