@@ -181,6 +181,7 @@ async function openNote(id) {
   renderKeywords(note.keywords);
   dirty = false; // freshly loaded note has nothing unsaved
   saveState.textContent = '';
+  renderPreview();
   renderTree();
   if (graph) graph.setActive(id);
   // make sure we're on the editor tab
@@ -197,6 +198,7 @@ editor.addEventListener('input', () => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveCurrent, 500);
   handleAutocomplete();
+  renderPreview();
 });
 
 // Clicking away from the editor saves right away.
@@ -670,6 +672,91 @@ $('delete-note-btn').onclick = async () => {
   noteCat.textContent = '';
   await refresh();
 };
+
+// ---- Markdown preview (M3 split pane) -------------------------------------
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderInline(raw) {
+  let s = escHtml(raw);
+  s = s.replace(/!\[\[([^\]]+)\]\]/g, (_, f) =>
+    `<img src="vault:///${f}" class="md-img" alt="${f}">`);
+  s = s.replace(/\[\[([^\]]+)\]\]/g, (_, t) =>
+    `<span class="wikilink" data-title="${t}">${t}</span>`);
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  return s;
+}
+
+function markdownToHtml(text) {
+  const lines = text.split('\n');
+  const out = [];
+  let listType = null;
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  for (const line of lines) {
+    const hm = line.match(/^(#{1,6}) (.+)/);
+    if (hm) {
+      closeList();
+      const lv = hm[1].length;
+      out.push(`<h${lv}>${renderInline(hm[2])}</h${lv}>`);
+    } else if (/^[-*] /.test(line)) {
+      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+      out.push(`<li>${renderInline(line.slice(2))}</li>`);
+    } else if (/^\d+\. /.test(line)) {
+      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
+      out.push(`<li>${renderInline(line.replace(/^\d+\.\s+/, ''))}</li>`);
+    } else if (line.trim() === '') {
+      closeList();
+      out.push('<div class="md-spacer"></div>');
+    } else {
+      closeList();
+      out.push(`<p>${renderInline(line)}</p>`);
+    }
+  }
+  closeList();
+  return out.join('');
+}
+
+function renderPreview() {
+  const pane = $('preview');
+  if (!pane) return;
+  pane.innerHTML = markdownToHtml(editor.value);
+  for (const el of pane.querySelectorAll('.wikilink')) {
+    el.addEventListener('click', () => followLink(el.dataset.title));
+  }
+}
+
+// Draggable split handle
+(function initSplitHandle() {
+  const handle = $('split-handle');
+  const editorPane = $('editor-pane');
+  let dragging = false, startX = 0, startW = 0;
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = editorPane.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const split = $('editor-split');
+    const totalW = split.getBoundingClientRect().width;
+    const newW = Math.max(180, Math.min(totalW - 200, startW + (e.clientX - startX)));
+    editorPane.style.flex = 'none';
+    editorPane.style.width = newW + 'px';
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
 
 // ---- Photo attachments (M2) -----------------------------------------------
 const MAX_IMG_WARN_BYTES = 20 * 1024 * 1024; // warn at 20 MB

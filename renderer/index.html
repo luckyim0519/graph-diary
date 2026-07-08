@@ -63,13 +63,21 @@
             </span>
           </div>
           <div id="note-keywords" title="Auto-summarized keywords (written to the file header)"></div>
-          <div id="editor-wrap">
-            <textarea
-              id="editor"
-              spellcheck="true"
-              placeholder="Start writing… use [[Note Name]] to link to another note."
-            ></textarea>
-            <div id="autocomplete" class="hidden"></div>
+          <div id="editor-split">
+            <div id="editor-pane">
+              <div id="editor-wrap">
+                <textarea
+                  id="editor"
+                  spellcheck="true"
+                  placeholder="Start writing… use [[Note Name]] to link to another note."
+                ></textarea>
+                <div id="autocomplete" class="hidden"></div>
+              </div>
+            </div>
+            <div id="split-handle" title="Drag to resize"></div>
+            <div id="preview-pane">
+              <div id="preview"></div>
+            </div>
           </div>
         </section>
 
