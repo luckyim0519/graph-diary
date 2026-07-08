@@ -114,7 +114,8 @@ function extractKeywords(body, max = 5) {
 }
 
 // ---- Frontmatter ----------------------------------------------------------
-// Header fields: date, theme, subtheme, mood, emotions, keywords.
+// Header fields: date, theme, subtheme, keywords.
+// Old fields mood: / emotions: are parsed and silently ignored (FR-7.2 tolerance).
 
 function field(block, name) {
   // [ \t]* (not \s*) so an empty value doesn't swallow the next line
@@ -126,18 +127,16 @@ function listField(block, name) {
   return v ? v.split(',').map((s) => s.trim()).filter(Boolean) : [];
 }
 
-// Returns { meta, body }. meta = { date, theme, subtheme, mood, emotions, keywords }
+// Returns { meta, body }. meta = { date, theme, subtheme, keywords }
+// Old mood:/emotions: fields in the block are tolerated (parse-and-ignore).
 function parseFrontmatter(raw) {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
   if (!m) return { meta: {}, body: raw };
   const block = m[1];
-  const moodRaw = field(block, 'mood');
   const meta = {
     date: field(block, 'date'),
     theme: field(block, 'theme'),
     subtheme: field(block, 'subtheme'),
-    mood: moodRaw === '' ? null : Number(moodRaw),
-    emotions: listField(block, 'emotions'),
     keywords: listField(block, 'keywords'),
   };
   return { meta, body: raw.slice(m[0].length).replace(/^\n+/, '') };
@@ -240,8 +239,6 @@ async function listNotes() {
         theme: meta.theme || '',
         subtheme: meta.subtheme || '',
         date,
-        mood: meta.mood,
-        emotions: meta.emotions || [],
       });
     }
   }
@@ -274,15 +271,14 @@ function existingMeta(full) {
   }
 }
 
-// Saving re-derives keywords from the body and clears the cached mood (the body
-// changed, so it must be re-analyzed). The entry's date is preserved.
+// Saving re-derives keywords from the body. The entry's date is preserved.
 ipcMain.handle('note:save', async (_e, { id, content, theme, subtheme, date }) => {
   const full = path.join(VAULT, id);
   const prev = existingMeta(full);
   const keywords = extractKeywords(content);
   await fsp.writeFile(full, composeFile(content, {
     date: date || prev.date || today(), theme: theme || '', subtheme: subtheme || '',
-    keywords, mood: null, emotions: [],
+    keywords,
   }), 'utf8');
   return { keywords };
 });
@@ -296,7 +292,7 @@ ipcMain.on('note:save-sync', (e, { id, content, theme, subtheme, date }) => {
     const keywords = extractKeywords(content);
     fs.writeFileSync(full, composeFile(content, {
       date: date || prev.date || today(), theme: theme || '', subtheme: subtheme || '',
-      keywords, mood: null, emotions: [],
+      keywords,
     }), 'utf8');
     e.returnValue = { ok: true };
   } catch (err) {
@@ -344,7 +340,7 @@ ipcMain.handle('note:move', async (_e, { id, toCategory }) => {
 
 // Reclassify a note via drag & drop onto a theme / sub-theme: optionally move
 // it to another category (file rename, collision-safe) AND set its theme /
-// subtheme header. Body, keywords, mood, date are all preserved.
+// subtheme header. Body, keywords, date are all preserved.
 ipcMain.handle('note:reclassify', async (_e, { id, category, theme, subtheme }) => {
   const fromCategory = path.dirname(id);
   let dest = path.join(VAULT, id);
