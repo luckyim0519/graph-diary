@@ -481,13 +481,18 @@ function renderLegend() {
     '<div class="legend-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' +
     `<label style="display:flex;align-items:center;gap:6px;cursor:pointer">` +
     `<input type="checkbox" id="kw-bridge-toggle"${showKeywordBridges ? ' checked' : ''}>` +
-    `<span style="width:18px;border-top:2px dashed #bb9af7;display:inline-block"></span>keyword bridges (≥2 shared)</label></div>`;
+    `<span style="width:18px;border-top:2px dashed #bb9af7;display:inline-block"></span>keyword bridges (≥2 shared)</label></div>` +
+    '<div class="legend-row" style="margin-top:4px">' +
+    `<button id="mode-2d-btn" style="font-size:11px;padding:2px 8px">${graph && graph.is2D ? '3D mode' : '2D mode'}</button></div>`;
 
   const toggle = document.getElementById('kw-bridge-toggle');
-  if (toggle) {
-    toggle.addEventListener('change', () => {
-      showKeywordBridges = toggle.checked;
-      updateGraph();
+  if (toggle) toggle.addEventListener('change', () => { showKeywordBridges = toggle.checked; updateGraph(); });
+
+  const modeBtn = document.getElementById('mode-2d-btn');
+  if (modeBtn) {
+    modeBtn.addEventListener('click', () => {
+      graph.toggle2D(!graph.is2D);
+      modeBtn.textContent = graph.is2D ? '3D mode' : '2D mode';
     });
   }
 }
