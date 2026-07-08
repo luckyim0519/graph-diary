@@ -1,8 +1,17 @@
-// ---- Posts view (FR-8) — Instagram-style diary feed ----------------------
+// ---- Posts view (FR-8) — Instagram-style diary feed + photo grid ----------
 // Depends on: escHtml, markdownToHtml, renderInline, followLink, colorFor,
 //             prettify (all defined in app.js, loaded before this file).
 
+// ---- State ----------------------------------------------------------------
 let postsActiveCategories = new Set(); // empty = show all
+let postsMode = null; // 'feed' | 'grid' — null until first render (auto-detect)
+
+// Lightbox state for grid prev/next navigation
+let lbPhotos = [];     // array of vault:// URLs for the active entry
+let lbIndex = 0;       // current photo index in lbPhotos
+let lbNoteId = null;   // id of the note whose lightbox is open
+
+// ---- Helpers --------------------------------------------------------------
 
 function imageEmbeds(content) {
   const re = /!\[\[([^\]]+)\]\]/g;
@@ -59,6 +68,19 @@ function monthYearOfDate(dateStr) {
   return d;
 }
 
+// Alpha-blend a hex color at given opacity for placeholder tile backgrounds
+function hexAlpha(color, alpha) {
+  if (color.startsWith('#') && color.length === 7) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  return color; // hsl() — return as-is (alpha on hsl is fine with modern CSS)
+}
+
+// ---- Feed mode card -------------------------------------------------------
+
 function buildCard(note) {
   const imgs = imageEmbeds(note.content);
   const [cover, ...extraImgs] = imgs;
@@ -74,7 +96,7 @@ function buildCard(note) {
     img.loading = 'lazy';
     img.alt = cover;
     img.src = `vault:///${cover}`;
-    img.addEventListener('click', () => openLightbox(`vault:///${cover}`));
+    img.addEventListener('click', () => openLightbox(imgs.map(f => `vault:///${f}`), 0, note.id));
     card.appendChild(img);
   } else {
     const banner = document.createElement('div');
@@ -135,13 +157,15 @@ function buildCard(note) {
   if (extraImgs.length) {
     const thumbs = document.createElement('div');
     thumbs.className = 'post-thumbs';
-    for (const img of extraImgs) {
+    for (let i = 0; i < extraImgs.length; i++) {
+      const img = extraImgs[i];
       const t = document.createElement('img');
       t.className = 'post-thumb';
       t.loading = 'lazy';
       t.alt = img;
       t.src = `vault:///${img}`;
-      t.addEventListener('click', () => openLightbox(`vault:///${img}`));
+      // index+1 because index 0 is the cover
+      t.addEventListener('click', () => openLightbox(imgs.map(f => `vault:///${f}`), i + 1, note.id));
       thumbs.appendChild(t);
     }
     wrap.appendChild(thumbs);
@@ -165,12 +189,71 @@ function buildCard(note) {
   return card;
 }
 
+// ---- Grid mode tile -------------------------------------------------------
+
+function buildGridTile(note) {
+  const imgs = imageEmbeds(note.content);
+  if (!imgs.length) return null; // grid only shows photo entries
+
+  const cover = imgs[0];
+  const color = colorFor(note.category);
+
+  const tile = document.createElement('div');
+  tile.className = 'grid-tile';
+  tile.style.backgroundColor = hexAlpha(color, 0.15);
+  tile.dataset.id = note.id;
+
+  // Cover image (lazy, object-fit cover via CSS)
+  const img = document.createElement('img');
+  img.className = 'grid-tile-img';
+  img.loading = 'lazy';
+  img.alt = note.title;
+  img.src = `vault:///${cover}`;
+  tile.appendChild(img);
+
+  // Multi-photo badge ⧉
+  if (imgs.length > 1) {
+    const badge = document.createElement('span');
+    badge.className = 'grid-multi-badge';
+    badge.textContent = '⧉';
+    tile.appendChild(badge);
+  }
+
+  // Hover overlay: shows date
+  const overlay = document.createElement('div');
+  overlay.className = 'grid-tile-overlay';
+  overlay.innerHTML = `<span class="grid-tile-date">${escHtml(formatKoDate(note.date))}</span>`;
+  tile.appendChild(overlay);
+
+  // Click → lightbox starting at cover, cycling through all photos
+  tile.addEventListener('click', () => {
+    openLightbox(imgs.map(f => `vault:///${f}`), 0, note.id);
+  });
+
+  return tile;
+}
+
+// ---- Render entry points --------------------------------------------------
+
 function renderPosts(notes, categories) {
   const filterBar = document.getElementById('posts-filter-bar');
   const feed = document.getElementById('posts-feed');
   if (!filterBar || !feed) return;
 
-  // Build filter chips
+  // Auto-detect default mode on first render
+  if (postsMode === null) {
+    const withPhotos = notes.filter(n => imageEmbeds(n.content).length > 0).length;
+    postsMode = (withPhotos / Math.max(notes.length, 1)) > 0.5 ? 'grid' : 'feed';
+  }
+
+  // Build filter chips + mode switch
+  buildFilterBar(notes, categories);
+  updateModeButtons();
+  buildContent(notes);
+}
+
+function buildFilterBar(notes, categories) {
+  const filterBar = document.getElementById('posts-filter-bar');
   filterBar.innerHTML = '';
   for (const cat of categories) {
     const chip = document.createElement('button');
@@ -188,12 +271,26 @@ function renderPosts(notes, categories) {
         chip.classList.add('active');
         chip.style.background = color;
       }
-      buildFeed(notes);
+      // Re-render content only (filter bar stays)
+      buildContent(_lastNotes);
     });
     filterBar.appendChild(chip);
   }
+}
 
-  buildFeed(notes);
+// Keep a reference to the last notes array for filter clicks
+let _lastNotes = [];
+
+function buildContent(notes) {
+  _lastNotes = notes;
+  if (postsMode === 'grid') {
+    buildGrid(notes);
+  } else {
+    buildFeed(notes);
+  }
+  // Show/hide the right container
+  document.getElementById('posts-feed').classList.toggle('hidden', postsMode === 'grid');
+  document.getElementById('posts-grid').classList.toggle('hidden', postsMode !== 'grid');
 }
 
 function buildFeed(notes) {
@@ -204,11 +301,8 @@ function buildFeed(notes) {
     ? notes
     : notes.filter((n) => postsActiveCategories.has(n.category));
 
-  // Newest first
-  const sorted = [...visible].sort((a, b) => {
-    const da = noteDate(a), db = noteDate(b);
-    return db.localeCompare(da);
-  });
+  // Newest first (undated sink to bottom)
+  const sorted = [...visible].sort((a, b) => noteDate(b).localeCompare(noteDate(a)));
 
   for (const note of sorted) {
     feed.appendChild(buildCard(note));
@@ -219,21 +313,125 @@ function buildFeed(notes) {
   }
 }
 
-// Lightbox
-function openLightbox(src) {
+function buildGrid(notes) {
+  const grid = document.getElementById('posts-grid');
+  grid.innerHTML = '';
+
+  const visible = postsActiveCategories.size === 0
+    ? notes
+    : notes.filter((n) => postsActiveCategories.has(n.category));
+
+  const sorted = [...visible].sort((a, b) => noteDate(b).localeCompare(noteDate(a)));
+
+  const withPhotos = sorted.filter(n => imageEmbeds(n.content).length > 0);
+  const withoutPhotos = sorted.filter(n => imageEmbeds(n.content).length === 0);
+
+  // Count note for text-only entries
+  if (withoutPhotos.length > 0) {
+    const note = document.createElement('p');
+    note.className = 'grid-text-note';
+    note.innerHTML = `글만 있는 일기 <strong>${withoutPhotos.length}개</strong>는 ` +
+      `<button class="grid-switch-feed-btn">피드에서 보기</button>`;
+    note.querySelector('.grid-switch-feed-btn').addEventListener('click', () => {
+      switchPostsMode('feed');
+    });
+    grid.appendChild(note);
+  }
+
+  if (!withPhotos.length) {
+    const empty = document.createElement('p');
+    empty.style.cssText = 'color:var(--text-dim);text-align:center;margin-top:60px;width:100%';
+    empty.textContent = '사진이 있는 일기가 없습니다. 피드에서 보기를 눌러 모든 일기를 확인하세요.';
+    grid.appendChild(empty);
+    return;
+  }
+
+  const tileWrap = document.createElement('div');
+  tileWrap.className = 'grid-tiles';
+  for (const note of withPhotos) {
+    const tile = buildGridTile(note);
+    if (tile) tileWrap.appendChild(tile);
+  }
+  grid.appendChild(tileWrap);
+}
+
+// ---- Mode switching -------------------------------------------------------
+
+function switchPostsMode(mode) {
+  postsMode = mode;
+  updateModeButtons();
+  buildContent(_lastNotes);
+}
+
+function updateModeButtons() {
+  const feedBtn = document.getElementById('posts-mode-feed');
+  const gridBtn = document.getElementById('posts-mode-grid');
+  if (!feedBtn || !gridBtn) return;
+  feedBtn.classList.toggle('active', postsMode === 'feed');
+  gridBtn.classList.toggle('active', postsMode === 'grid');
+}
+
+// Wire mode buttons (called once after DOM ready, here in DOMContentLoaded scope)
+document.getElementById('posts-mode-feed').addEventListener('click', () => switchPostsMode('feed'));
+document.getElementById('posts-mode-grid').addEventListener('click', () => switchPostsMode('grid'));
+
+// ---- Lightbox -------------------------------------------------------------
+// Supports both feed (single-image) and grid (multi-image with prev/next)
+
+function openLightbox(photos, startIndex, noteId) {
+  lbPhotos = photos || [];
+  lbIndex = startIndex || 0;
+  lbNoteId = noteId || null;
+
   const lb = document.getElementById('lightbox');
-  const img = document.getElementById('lightbox-img');
-  img.src = src;
   lb.classList.remove('hidden');
+  setLightboxPhoto(lbIndex);
+
+  // Show/hide nav arrows
+  const showNav = lbPhotos.length > 1;
+  document.getElementById('lightbox-prev').classList.toggle('hidden', !showNav);
+  document.getElementById('lightbox-next').classList.toggle('hidden', !showNav);
+}
+
+function setLightboxPhoto(index) {
+  lbIndex = (index + lbPhotos.length) % lbPhotos.length;
+  document.getElementById('lightbox-img').src = lbPhotos[lbIndex];
 }
 
 function closeLightbox() {
   const lb = document.getElementById('lightbox');
   lb.classList.add('hidden');
   document.getElementById('lightbox-img').src = '';
+  lbPhotos = [];
+  lbNoteId = null;
 }
 
 document.getElementById('lightbox-scrim').addEventListener('click', closeLightbox);
+
+document.getElementById('lightbox-prev').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setLightboxPhoto(lbIndex - 1);
+});
+
+document.getElementById('lightbox-next').addEventListener('click', (e) => {
+  e.stopPropagation();
+  setLightboxPhoto(lbIndex + 1);
+});
+
+document.getElementById('lightbox-open-note').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (lbNoteId) {
+    closeLightbox();
+    // followLink works by title, so use openNote directly via the notes array
+    // app.js exposes openNote globally on window
+    if (typeof openNote === 'function') openNote(lbNoteId);
+  }
+});
+
 document.addEventListener('keydown', (e) => {
+  const lb = document.getElementById('lightbox');
+  if (lb.classList.contains('hidden')) return;
   if (e.key === 'Escape') closeLightbox();
+  else if (e.key === 'ArrowLeft') setLightboxPhoto(lbIndex - 1);
+  else if (e.key === 'ArrowRight') setLightboxPhoto(lbIndex + 1);
 });

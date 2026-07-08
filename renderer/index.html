@@ -89,14 +89,28 @@
 
         <!-- Posts feed view -->
         <section id="posts-view" class="view hidden">
-          <div id="posts-filter-bar"></div>
-          <div id="posts-feed"></div>
+          <div id="posts-toolbar-row">
+            <div id="posts-filter-bar"></div>
+            <div id="posts-mode-switch">
+              <button id="posts-mode-feed" class="mode-btn" title="Feed view">☰</button>
+              <button id="posts-mode-grid" class="mode-btn" title="Grid view">⊞</button>
+            </div>
+          </div>
+          <div id="posts-content">
+            <div id="posts-feed"></div>
+            <div id="posts-grid" class="hidden"></div>
+          </div>
         </section>
 
         <!-- Lightbox -->
         <div id="lightbox" class="hidden">
           <div id="lightbox-scrim"></div>
+          <button id="lightbox-prev" class="lightbox-nav">&#8249;</button>
           <img id="lightbox-img" alt="">
+          <button id="lightbox-next" class="lightbox-nav">&#8250;</button>
+          <div id="lightbox-footer">
+            <button id="lightbox-open-note" class="lightbox-open-btn">✎ 열기</button>
+          </div>
         </div>
       </main>
     </div>
