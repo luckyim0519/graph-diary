@@ -1,7 +1,12 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
+
+// vault:// is a read-only image-serving scheme — must be registered before app ready.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'vault', privileges: { secure: true, standard: true } },
+]);
 
 // The "vault" is just a folder of Markdown files on disk.
 // Each top-level subfolder is a category (e.g. villain-diary, daily-diary).
@@ -95,9 +100,11 @@ function tokenize(text) {
 // Pulls the most notable words out of a note's body for the header.
 // Works for Korean and English; title words count double.
 function extractKeywords(body, max = 5) {
+  // Strip ![[embed]] syntax so image filenames don't pollute keywords (FR-2.6)
+  const stripped = body.replace(/!\[\[[^\]]*\]\]/g, '');
   const titleSet = new Set(tokenize(extractTitle(body) || ''));
   const freq = new Map();
-  for (const w of tokenize(body)) {
+  for (const w of tokenize(stripped)) {
     freq.set(w, (freq.get(w) || 0) + (titleSet.has(w) ? 2 : 1));
   }
   return [...freq.entries()]
@@ -318,7 +325,7 @@ async function listNotes() {
   const notes = [];
   const cats = await fsp.readdir(VAULT, { withFileTypes: true });
   for (const cat of cats) {
-    if (!cat.isDirectory() || cat.name.startsWith('.')) continue; // skip .trash etc.
+    if (!cat.isDirectory() || cat.name.startsWith('.') || cat.name.startsWith('_')) continue; // skip .trash, _assets etc.
     const dir = path.join(VAULT, cat.name);
     const files = await fsp.readdir(dir, { withFileTypes: true });
     for (const f of files) {
@@ -363,7 +370,7 @@ ipcMain.handle('categories:list', async () => {
   await ensureVault();
   const cats = await fsp.readdir(VAULT, { withFileTypes: true });
   return cats
-    .filter((c) => c.isDirectory() && !c.name.startsWith('.'))
+    .filter((c) => c.isDirectory() && !c.name.startsWith('.') && !c.name.startsWith('_'))
     .map((c) => c.name);
 });
 
@@ -518,6 +525,44 @@ ipcMain.handle('category:create', async (_e, { name }) => {
 
 ipcMain.handle('vault:path', () => VAULT);
 
+// ---- Attachments (FR-2) --------------------------------------------------
+
+const ALLOWED_IMG_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+const MIME_FOR_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+
+ipcMain.handle('attachment:save', async (_e, { category, data, filename, mimeType }) => {
+  const assetsDir = path.join(VAULT, category, '_assets');
+  await fsp.mkdir(assetsDir, { recursive: true });
+
+  const extFromMime = mimeType === 'image/jpeg' ? '.jpg'
+    : mimeType === 'image/png' ? '.png'
+    : mimeType === 'image/gif' ? '.gif'
+    : mimeType === 'image/webp' ? '.webp' : null;
+  const extFromName = path.extname(filename || '').toLowerCase();
+  const ext = extFromMime || (ALLOWED_IMG_EXTS.has(extFromName) ? extFromName : '.jpg');
+
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 10).replace(/-/g, '') + '-' +
+    now.toISOString().slice(11, 19).replace(/:/g, '');
+  const base = path.basename(filename || 'image', path.extname(filename || '')).slice(0, 40);
+  const slug = slugify(base).slice(0, 30) || 'image';
+  let name = `${stamp}-${slug}${ext}`;
+  let i = 2;
+  while (fs.existsSync(path.join(assetsDir, name))) {
+    name = `${stamp}-${slug}-${i}${ext}`; i++;
+  }
+  await fsp.writeFile(path.join(assetsDir, name), Buffer.from(data));
+  return name;
+});
+
+// HEIC → JPEG fallback via nativeImage (used when canvas/createImageBitmap fails)
+ipcMain.handle('attachment:convert-heic', async (_e, { data }) => {
+  const img = nativeImage.createFromBuffer(Buffer.from(data));
+  if (img.isEmpty()) return null;
+  const jpeg = img.toJPEG(92);
+  return jpeg.buffer.slice(jpeg.byteOffset, jpeg.byteOffset + jpeg.byteLength);
+});
+
 // ---- Backup (FR-5) -------------------------------------------------------
 
 const BACKUP_DRIVE = '/Volumes/Seagate';
@@ -581,6 +626,52 @@ ipcMain.handle('backup:run', () => runBackup());
 // ---- App lifecycle --------------------------------------------------------
 
 app.whenReady().then(async () => {
+  // vault:// protocol — serves images from <VAULT>/<cat>/_assets/ read-only.
+  // URL format: vault:///<filename>  → searches all categories' _assets dirs.
+  protocol.handle('vault', async (request) => {
+    const url = new URL(request.url);
+    // With standard:true, Chromium normalizes vault:///file.png → vault://file.png/
+    // so the filename ends up in hostname instead of pathname. Handle both forms:
+    //   vault://local/file.png  → pathname=/file.png  (preferred, used by M3 renderer)
+    //   vault:///file.png       → hostname=file.png, pathname=/  (fallback)
+    let filename = url.pathname.replace(/^\/+/, '');
+    if (!filename && url.hostname && path.extname(url.hostname)) {
+      filename = url.hostname;
+    }
+    if (!filename || filename.includes('..') || filename.includes('/')) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    const ext = path.extname(filename).toLowerCase();
+    if (!ALLOWED_IMG_EXTS.has(ext)) return new Response('Forbidden', { status: 403 });
+
+    // Search all category _assets/ dirs for the file (§5.1 resolution rule)
+    let filePath = null;
+    try {
+      const cats = await fsp.readdir(VAULT, { withFileTypes: true });
+      for (const cat of cats) {
+        if (!cat.isDirectory() || cat.name.startsWith('.') || cat.name.startsWith('_')) continue;
+        const candidate = path.join(VAULT, cat.name, '_assets', filename);
+        if (fs.existsSync(candidate)) { filePath = candidate; break; }
+      }
+    } catch { /* vault not ready yet */ }
+
+    if (!filePath) return new Response('Not Found', { status: 404 });
+
+    // Double-check the resolved path stays inside VAULT/_assets
+    const canonical = path.resolve(filePath);
+    const vaultRoot = path.resolve(VAULT);
+    if (!canonical.startsWith(vaultRoot + path.sep) || !canonical.includes('_assets')) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    try {
+      const data = await fsp.readFile(canonical);
+      return new Response(data, { headers: { 'Content-Type': MIME_FOR_EXT[ext] || 'image/jpeg' } });
+    } catch {
+      return new Response('Not Found', { status: 404 });
+    }
+  });
+
   await ensureVault();
   console.error('[graph-diary] vault ready at', VAULT);
   createWindow();

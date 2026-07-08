@@ -671,6 +671,106 @@ $('delete-note-btn').onclick = async () => {
   await refresh();
 };
 
+// ---- Photo attachments (M2) -----------------------------------------------
+const MAX_IMG_WARN_BYTES = 20 * 1024 * 1024; // warn at 20 MB
+
+async function heicToJpeg(file) {
+  // Chromium on macOS supports HEIC natively via createImageBitmap
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const blob = await new Promise((res, rej) =>
+      canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), 'image/jpeg', 0.92));
+    return blob.arrayBuffer();
+  } catch {
+    // Fall back to nativeImage in main process
+    const raw = await file.arrayBuffer();
+    return window.api.convertHeic(raw);
+  }
+}
+
+async function insertAttachment(file) {
+  if (!currentId) return;
+  const note = notes.find(n => n.id === currentId);
+  if (!note) return;
+
+  if (file.size > MAX_IMG_WARN_BYTES) {
+    saveState.textContent = `warning: large image (${(file.size / 1024 / 1024).toFixed(1)} MB), importing…`;
+  } else {
+    saveState.textContent = 'importing image…';
+  }
+
+  const isHEIC = /\.heic$/i.test(file.name) || file.type === 'image/heic' || file.type === 'image/heif';
+
+  let data, mimeType, filename;
+  if (isHEIC) {
+    const converted = await heicToJpeg(file);
+    if (!converted) { saveState.textContent = 'error: could not convert HEIC'; return; }
+    data = converted;
+    mimeType = 'image/jpeg';
+    filename = file.name.replace(/\.heic$/i, '.jpg');
+  } else {
+    data = await file.arrayBuffer();
+    mimeType = file.type || 'image/png';
+    filename = file.name || 'image.png';
+  }
+
+  const savedName = await window.api.saveAttachment(note.category, data, filename, mimeType);
+
+  // Insert ![[filename]] at caret
+  const pos = editor.selectionStart;
+  const before = editor.value.slice(0, pos);
+  const after = editor.value.slice(pos);
+  const embed = `![[${savedName}]]`;
+  editor.value = before + embed + after;
+  const newPos = pos + embed.length;
+  editor.setSelectionRange(newPos, newPos);
+  editor.focus();
+
+  // Mark dirty and save
+  if (note) note.content = editor.value;
+  dirty = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveCurrent, 500);
+  saveState.textContent = `image attached: ${savedName}`;
+}
+
+// Paste: intercept image paste, let text paste fall through
+editor.addEventListener('paste', async (e) => {
+  if (!currentId) return;
+  const items = Array.from(e.clipboardData?.items || []);
+  const imageItem = items.find(item => item.type.startsWith('image/'));
+  if (!imageItem) return;
+  e.preventDefault();
+  const file = imageItem.getAsFile();
+  if (file) await insertAttachment(file);
+});
+
+// Drag-drop image files onto the editor
+editor.addEventListener('dragover', (e) => {
+  const hasImage = Array.from(e.dataTransfer?.items || [])
+    .some(i => i.kind === 'file' && (i.type.startsWith('image/') || i.type === ''));
+  if (hasImage) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    editor.classList.add('drag-over');
+  }
+});
+editor.addEventListener('dragleave', () => editor.classList.remove('drag-over'));
+editor.addEventListener('drop', async (e) => {
+  editor.classList.remove('drag-over');
+  const files = Array.from(e.dataTransfer?.files || [])
+    .filter(f => f.type.startsWith('image/') || /\.heic$/i.test(f.name));
+  if (!files.length) return;
+  e.preventDefault();
+  e.stopPropagation();
+  for (const file of files) await insertAttachment(file);
+});
+
 // ---- Backup ---------------------------------------------------------------
 $('backup-btn').onclick = async () => {
   const btn = $('backup-btn');

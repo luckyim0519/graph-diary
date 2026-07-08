@@ -258,6 +258,7 @@ html, body {
   outline: none;
 }
 #editor:focus { border-color: var(--accent); }
+#editor.drag-over { border-color: var(--green); background: rgba(158,206,106,0.07); }
 
 #autocomplete {
   position: absolute;

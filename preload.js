@@ -19,4 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   ollamaStatus: () => ipcRenderer.invoke('ollama:status'),
   analyzeMoods: (force) => ipcRenderer.invoke('moods:analyze', { force }),
   backup: () => ipcRenderer.invoke('backup:run'),
+  saveAttachment: (category, data, filename, mimeType) =>
+    ipcRenderer.invoke('attachment:save', { category, data, filename, mimeType }),
+  convertHeic: (data) =>
+    ipcRenderer.invoke('attachment:convert-heic', { data }),
 });
