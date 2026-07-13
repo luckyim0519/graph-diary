@@ -482,6 +482,37 @@ async function runBackup() {
 
 ipcMain.handle('backup:run', () => runBackup());
 
+// ---- Life Assistant (assistant/ module) ------------------------------------
+// The assistant is a standalone Node module; the app passes its VAULT so both
+// always agree on where the diary lives.
+
+const assistant = require('./assistant');
+const assistantCfg = () => assistant.loadConfig({ vault: VAULT });
+
+ipcMain.handle('assistant:new-journal', async () => {
+  const r = assistant.newJournal(assistantCfg());
+  return r; // { id, created }
+});
+
+ipcMain.handle('assistant:new-logs', async () => {
+  return assistant.newHabitLogs(assistantCfg()); // [{ id, created }]
+});
+
+// kind: 'week' | 'month'; period defaults to the current one.
+ipcMain.handle('assistant:review', async (_e, { kind, period } = {}) => {
+  const cfg = assistantCfg();
+  const todayStr = new Date().toLocaleDateString('sv'); // local YYYY-MM-DD
+  const p = period ||
+    (kind === 'month' ? todayStr.slice(0, 7) : assistant.isoweek.weekString(todayStr));
+  try {
+    const res = await assistant.generateReview(kind, p, cfg);
+    return { ok: true, period: p, path: res.path, warnings: res.warnings };
+  } catch (err) {
+    // err.message may include a validation report but never prompt contents.
+    return { ok: false, period: p, error: String(err.message || err) };
+  }
+});
+
 // ---- App lifecycle --------------------------------------------------------
 
 app.whenReady().then(async () => {

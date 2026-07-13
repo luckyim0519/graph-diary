@@ -796,6 +796,48 @@ $('backup-btn').onclick = async () => {
   }
 };
 
+// ---- Life Assistant ---------------------------------------------------------
+$('journal-btn').onclick = async () => {
+  const r = await window.api.assistantNewJournal();
+  await refresh();
+  openNote(r.id);
+  saveState.textContent = r.created ? '오늘 일기 생성 ✓' : '오늘 일기가 이미 있어요';
+};
+
+$('logs-btn').onclick = async () => {
+  const rs = await window.api.assistantNewLogs();
+  await refresh();
+  openNote(rs[0].id);
+  saveState.textContent = rs.some((r) => r.created) ? '주간 로그 생성 ✓' : '이번 주 로그가 이미 있어요';
+};
+
+$('review-btn').onclick = async () => {
+  const res = await modal({
+    title: '리뷰 생성 — 기간 입력 (주간: 2026-W28 · 월간: 2026-07 · 비우면 이번 기간)',
+    withSelect: true,
+    options: [
+      { value: 'week', label: '주간 리뷰 (weekly)' },
+      { value: 'month', label: '월간 리뷰 (monthly)' },
+    ],
+    placeholder: 'e.g. 2026-W28 — empty = current',
+  });
+  if (!res) return;
+  const btn = $('review-btn');
+  btn.disabled = true;
+  saveState.textContent = '리뷰 생성 중… (30초쯤 걸려요)';
+  const out = await window.api.assistantReview(res.select, res.text || undefined);
+  btn.disabled = false;
+  if (out.ok) {
+    saveState.textContent = `리뷰 완성 ✓ ${out.period}`;
+    await refresh();
+    const kind = res.select === 'week' ? 'weekly' : 'monthly';
+    openNote(`reviews/${kind}-${out.period}.md`);
+  } else {
+    saveState.textContent = '리뷰 실패 ✗';
+    alert(`리뷰 생성 실패 (${out.period}):\n\n${out.error}`);
+  }
+};
+
 // ---- Init -----------------------------------------------------------------
 window.addEventListener('resize', () => {
   if (graph) graph.resize();
