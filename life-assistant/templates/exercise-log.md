@@ -10,4 +10,5 @@ target_sessions: 4
 |------|------|--------|----------------|-----------------|------------|-------|
 |      |      |        |                |                 |            |       |
 
-<!-- Type is one of: Strength, Cycling, Hike, Run, Walk, Yoga/Stretch, Other -->
+<!-- Type list is user-defined in assistant/config.yaml (exercise_types) — see docs/PRD-habit-ui.md.
+     Rows are normally added via the app's ✅ Habits tab, not by hand. -->

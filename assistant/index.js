@@ -5,6 +5,7 @@ const { computePeriodStats } = require('./stats');
 const { generateReview } = require('./review');
 const { validateTransactions, formatReport, hasErrors } = require('./validate');
 const { newJournal, newHabitLogs } = require('./scaffold');
+const { logHabit, habitRange } = require('./habitlog');
 const isoweek = require('./isoweek');
 
 module.exports = {
@@ -13,5 +14,6 @@ module.exports = {
   generateReview,
   validateTransactions, formatReport, hasErrors,
   newJournal, newHabitLogs,
+  logHabit, habitRange,
   isoweek,
 };

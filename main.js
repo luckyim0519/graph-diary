@@ -513,6 +513,23 @@ ipcMain.handle('assistant:review', async (_e, { kind, period } = {}) => {
   }
 });
 
+// Habit UI (PRD-habit-ui): append-only logging + heatmap range data.
+ipcMain.handle('habit:log', async (_e, { habit, entry }) => {
+  try {
+    return { ok: true, ...assistant.logHabit(assistantCfg(), habit, entry) };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle('habit:data', async (_e, { habit, fromDate, toDate }) => {
+  const cfg = assistantCfg();
+  return {
+    ...assistant.habitRange(cfg, habit, fromDate, toDate),
+    exerciseTypes: cfg.exerciseTypes,
+  };
+});
+
 // ---- App lifecycle --------------------------------------------------------
 
 app.whenReady().then(async () => {

@@ -28,8 +28,11 @@ function parseMiniYaml(text) {
 }
 
 function coerce(v) {
-  const s = v.trim().replace(/^['"]|['"]$/g, '');
-  return /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : s;
+  const s = v.trim();
+  const list = /^\[(.*)\]$/.exec(s);
+  if (list) return list[1].split(',').map((x) => coerce(x)).filter((x) => x !== '');
+  const bare = s.replace(/^['"]|['"]$/g, '');
+  return /^-?\d+(\.\d+)?$/.test(bare) ? Number(bare) : bare;
 }
 
 function loadConfig(overrides = {}) {
@@ -41,6 +44,9 @@ function loadConfig(overrides = {}) {
   return {
     fx,
     model: cfg.model || 'claude-sonnet-4-6',
+    exerciseTypes: Array.isArray(cfg.exercise_types) && cfg.exercise_types.length
+      ? cfg.exercise_types
+      : ['Pilates', 'Gym', 'Band Stretching', 'Swimming', 'Kayaking', 'Walk', 'Run', 'Other'],
     vault,
     templatesDir: path.join(__dirname, '..', 'life-assistant', 'templates'),
     claudeMd: path.join(__dirname, '..', 'life-assistant', 'CLAUDE.md'),

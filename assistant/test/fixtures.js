@@ -82,7 +82,11 @@ function buildVault({ exerciseLog = true } = {}) {
 }
 
 function cfgFor(vault) {
-  return { vault, fx: FX, model: 'claude-sonnet-4-6' };
+  return {
+    vault, fx: FX, model: 'claude-sonnet-4-6',
+    templatesDir: path.join(__dirname, '..', '..', 'life-assistant', 'templates'),
+    claudeMd: path.join(__dirname, '..', '..', 'life-assistant', 'CLAUDE.md'),
+  };
 }
 
 module.exports = { buildVault, cfgFor, CSV_JULY, FX };

@@ -499,7 +499,7 @@ function renderLegend() {
 
 // ---- Tabs -----------------------------------------------------------------
 function switchTab(which) {
-  for (const t of ['editor', 'graph', 'posts']) {
+  for (const t of ['editor', 'graph', 'posts', 'habits']) {
     $('tab-' + t).classList.toggle('active', which === t);
     $(t + '-view').classList.toggle('hidden', which !== t);
   }
@@ -511,11 +511,13 @@ function switchTab(which) {
     graph.stop();
   }
   if (which === 'posts') renderPosts(notes, categories);
+  if (which === 'habits') renderHabits();
 }
 
 $('tab-editor').onclick = () => switchTab('editor');
 $('tab-graph').onclick = () => switchTab('graph');
 $('tab-posts').onclick = () => switchTab('posts');
+$('tab-habits').onclick = () => switchTab('habits');
 
 // ---- Modal helper ---------------------------------------------------------
 function modal({ title, withSelect, options, placeholder }) {

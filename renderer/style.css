@@ -739,3 +739,38 @@ button.primary { background: var(--accent); color: #1a1b26; font-weight: 600; }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+/* ---- Habits view (PRD-habit-ui) ---- */
+#habits-view { overflow-y: auto; }
+#habits-scroll { max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; }
+.habit-section { margin-bottom: 44px; }
+.habit-section h2 { font-size: 17px; margin: 0 0 10px; }
+.habit-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.hp-bar { flex: 0 0 220px; height: 8px; border-radius: 4px; background: rgba(122,130,168,0.18); overflow: hidden; }
+.hp-fill { height: 100%; border-radius: 4px; transition: width 200ms ease; }
+.hp-label { font-size: 12px; color: var(--muted, #7a82a8); }
+.habit-heatmap { display: flex; flex-direction: column; gap: 3px; margin-bottom: 16px; }
+.hm-row { display: flex; gap: 3px; align-items: center; }
+.hm-daylabel { width: 18px; font-size: 10px; color: var(--muted, #7a82a8); text-align: right; margin-right: 4px; }
+.hm-cell { width: 26px; height: 26px; border-radius: 5px; cursor: pointer; transition: transform 120ms ease; }
+.hm-cell:hover { transform: scale(1.18); }
+.hm-cell.hm-today { outline: 2px solid #c0caf5; outline-offset: 1px; }
+.hm-cell.hm-future { background: transparent; cursor: default; }
+.habit-form { display: flex; flex-direction: column; gap: 10px; }
+.hf-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hf-row label { font-size: 12px; color: var(--muted, #7a82a8); display: flex; align-items: center; gap: 4px; }
+.hf-hint { font-size: 11px; color: var(--muted, #7a82a8); }
+.hf-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.habit-chip { padding: 7px 14px; border-radius: 16px; border: 1px solid var(--border, #2f3350);
+  background: transparent; color: #c0caf5; font-size: 13px; cursor: pointer; transition: all 150ms ease; }
+.habit-chip:hover { border-color: #7aa2f7; }
+.habit-chip.sel { background: #7aa2f7; border-color: #7aa2f7; color: #1a1b26; font-weight: 600; }
+#habit-study .habit-chip.sel { background: #9ece6a; border-color: #9ece6a; }
+.hf-minutes { width: 72px; }
+.hf-date { color-scheme: dark; }
+.hf-area, .hf-detail { min-width: 140px; flex: 1; }
+.hf-save { padding: 7px 18px; border-radius: 8px; border: none; background: #7aa2f7; color: #1a1b26;
+  font-weight: 600; cursor: pointer; }
+#habit-study .hf-save { background: #9ece6a; }
+.hf-save:hover { filter: brightness(1.1); }
+.hf-output-label { user-select: none; }
