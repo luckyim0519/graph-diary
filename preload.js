@@ -21,11 +21,4 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('attachment:save', { category, data, filename, mimeType }),
   convertHeic: (data) =>
     ipcRenderer.invoke('attachment:convert-heic', { data }),
-  assistantNewJournal: () => ipcRenderer.invoke('assistant:new-journal'),
-  assistantNewLogs: () => ipcRenderer.invoke('assistant:new-logs'),
-  assistantReview: (kind, period) =>
-    ipcRenderer.invoke('assistant:review', { kind, period }),
-  habitLog: (habit, entry) => ipcRenderer.invoke('habit:log', { habit, entry }),
-  habitData: (habit, fromDate, toDate) =>
-    ipcRenderer.invoke('habit:data', { habit, fromDate, toDate }),
 });

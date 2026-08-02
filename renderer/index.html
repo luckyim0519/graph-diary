@@ -17,11 +17,6 @@
           <button id="new-note-btn" title="New note">+ Note</button>
           <button id="new-cat-btn" title="New category">+ Category</button>
         </div>
-        <div class="sidebar-actions" id="assistant-actions">
-          <button id="journal-btn" title="Create today's journal entry">📓 오늘 일기</button>
-          <button id="logs-btn" title="Create this week's exercise/study logs">🏃 주간 로그</button>
-          <button id="review-btn" title="Generate weekly/monthly review">🧾 리뷰</button>
-        </div>
         <div id="tree"></div>
         <div class="sidebar-foot">
           <span id="vault-path" title=""></span>
@@ -39,7 +34,6 @@
             <button id="tab-editor" class="tab active">✎ Editor</button>
             <button id="tab-graph" class="tab">🕸 Graph</button>
             <button id="tab-posts" class="tab">▦ Posts</button>
-            <button id="tab-habits" class="tab">✅ Habits</button>
           </div>
           <div class="tool-right">
             <span id="save-state"></span>
@@ -93,51 +87,6 @@
           <div id="graph-legend"></div>
         </section>
 
-        <!-- Habits view: check-off logging + coloring heatmaps -->
-        <section id="habits-view" class="view hidden">
-          <div id="habits-scroll">
-            <div class="habit-section" id="habit-exercise">
-              <h2>🏃 운동</h2>
-              <div class="habit-progress"><div class="hp-bar"><div class="hp-fill"></div></div><span class="hp-label"></span></div>
-              <div class="habit-heatmap"></div>
-              <form class="habit-form">
-                <div class="hf-row hf-date-row">
-                  <input type="date" class="hf-date" />
-                  <span class="hf-hint">칸을 클릭하면 그 날짜로 기록해요</span>
-                </div>
-                <div class="hf-chips"></div>
-                <div class="hf-row">
-                  <input type="number" class="hf-minutes" min="1" max="600" placeholder="분" required />
-                  <label>강도 <select class="hf-intensity"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
-                  <label>컨디션 <select class="hf-feel"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
-                  <input type="text" class="hf-detail" placeholder="메모 (선택)" />
-                  <button type="submit" class="hf-save">✓ 기록</button>
-                </div>
-              </form>
-            </div>
-            <div class="habit-section" id="habit-study">
-              <h2>📚 공부</h2>
-              <div class="habit-progress"><div class="hp-bar"><div class="hp-fill"></div></div><span class="hp-label"></span></div>
-              <div class="habit-heatmap"></div>
-              <form class="habit-form">
-                <div class="hf-row hf-date-row">
-                  <input type="date" class="hf-date" />
-                  <span class="hf-hint">칸을 클릭하면 그 날짜로 기록해요</span>
-                </div>
-                <div class="hf-chips"></div>
-                <div class="hf-row">
-                  <input type="text" class="hf-area" placeholder="분야 (새 분야 입력 가능)" />
-                  <input type="number" class="hf-minutes" min="1" max="600" placeholder="분" required />
-                  <label>깊이 <select class="hf-depth"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
-                  <label class="hf-output-label"><input type="checkbox" class="hf-output" /> 산출물</label>
-                  <input type="text" class="hf-detail" placeholder="뭘 공부했나요" />
-                  <button type="submit" class="hf-save">✓ 기록</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </section>
-
         <!-- Posts feed view -->
         <section id="posts-view" class="view hidden">
           <div id="posts-toolbar-row">
@@ -182,6 +131,5 @@
     <script src="graph.js"></script>
     <script src="app.js"></script>
     <script src="posts.js"></script>
-    <script src="habits.js"></script>
   </body>
 </html>
