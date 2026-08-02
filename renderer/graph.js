@@ -182,6 +182,28 @@ class GraphView {
   // ---- draw helpers (Obsidian style) ----
   _drawNode(ctx, p, n, dim, active) {
     const r = Math.max(2, this._radius(n) * p.scale);
+
+    // Ghost node (FR-E): unresolved [[link]] target — hollow, dashed, no
+    // category color, always dimmed relative to real nodes.
+    if (n.isGhost) {
+      ctx.globalAlpha = dim ? 0.15 : 0.55;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#7a82a8';
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (active) {
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
+
     const color = this.colors[n.category] || '#7aa2f7';
     const depthT = this.is2D ? 0.8 : Math.max(0, Math.min(1, (p.depth + 300) / 600));
     const baseAlpha = dim ? 0.12 : 0.7 + 0.3 * depthT;

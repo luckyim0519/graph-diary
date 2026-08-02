@@ -372,6 +372,7 @@ async function openNote(id) {
   dirty = false; // freshly loaded note has nothing unsaved
   saveState.textContent = '';
   renderPreview();
+  refreshMentions();
   renderTree();
   if (graph) graph.setActive(id);
   // make sure we're on the editor tab
@@ -437,6 +438,8 @@ async function saveCurrent() {
     refreshThemeList();
     if (graph) updateGraph();
   }
+  refreshMentions();
+  renderPreview();
 }
 
 // Last line of defence: if the window is closing with unsaved text,
@@ -607,7 +610,31 @@ editor.addEventListener('click', (e) => {
 function followLink(title) {
   const target = notes.find((n) => n.title.toLowerCase() === title.toLowerCase()
     || n.slug.toLowerCase() === title.toLowerCase());
-  if (target) openNote(target.id);
+  if (target) { openNote(target.id); return; }
+  // Unresolved wikilink — offer the same create flow as a ghost graph node (FR-E.3).
+  createFromUnresolvedLink(title);
+}
+
+// Prompts (reusing the existing new-note modal) to create a note for a title
+// that some [[link]] points at but doesn't exist yet. `defaultCategory`
+// overrides the current note's category (used by ghost-node clicks in the
+// graph, where "current note" may not be the linking note).
+async function createFromUnresolvedLink(title, defaultCategory) {
+  if (!categories.length) await ensureFirstCategory();
+  const currentNote = notes.find((n) => n.id === currentId);
+  const defaultCat = defaultCategory || (currentNote ? currentNote.category : (categories[0] || 'notes'));
+  const res = await modal({
+    title: `Create note “${title}”?`,
+    withSelect: true,
+    options: categories.map((c) => ({ value: c, label: prettify(c) })),
+    placeholder: 'Note title',
+    initialText: title,
+    initialSelect: defaultCat,
+  });
+  if (!res || !res.text) return;
+  const id = await window.api.createNote(res.select || defaultCat, res.text);
+  await refresh();
+  openNote(id);
 }
 
 // ---- Graph ----------------------------------------------------------------
@@ -633,15 +660,27 @@ function buildGraphData() {
     edgeMap.set(key, { source: aId, target: bId, type, shared: shared || [] });
   };
 
-  // 1) [[wiki-links]] — cross-category allowed; these are first-class edges
+  // 1) [[wiki-links]] — cross-category allowed; these are first-class edges.
+  // Links whose target doesn't exist become "ghost" nodes (FR-E) instead of
+  // being silently dropped, so the graph shows where the vault has gaps.
+  const ghostNodes = new Map(); // lowercased title -> ghost node
   for (const n of notes) {
     const re = /\[\[([^\]]+)\]\]/g;
     let m;
     while ((m = re.exec(n.content))) {
-      const target = byKey.get(m[1].trim().toLowerCase());
-      if (target && target.id !== n.id) {
-        addEdge(n.id, target.id, 'link', []);
+      const rawTitle = m[1].trim();
+      const key = rawTitle.toLowerCase();
+      const target = byKey.get(key);
+      if (target) {
+        if (target.id !== n.id) addEdge(n.id, target.id, 'link', []);
+        continue;
       }
+      let ghost = ghostNodes.get(key);
+      if (!ghost) {
+        ghost = { id: 'ghost:' + key, title: rawTitle, category: n.category, isGhost: true, theme: '', subtheme: '', year: 'undated' };
+        ghostNodes.set(key, ghost);
+      }
+      addEdge(n.id, ghost.id, 'link', []);
     }
   }
 
@@ -663,11 +702,15 @@ function buildGraphData() {
     id: n.id, title: n.title, category: n.category,
     theme: n.theme || '', subtheme: n.subtheme || '', year: yearOf(n),
   }));
-  return { nodes, edges: [...edgeMap.values()] };
+  const ghosts = [...ghostNodes.values()];
+  return { nodes: [...nodes, ...ghosts], edges: [...edgeMap.values()], ghosts };
 }
 
+let ghostIndex = new Map(); // ghost node id -> ghost node (for click-to-create, FR-E.2)
+
 function updateGraph() {
-  const { nodes, edges } = buildGraphData();
+  const { nodes, edges, ghosts } = buildGraphData();
+  ghostIndex = new Map(ghosts.map((g) => [g.id, g]));
   const filtered = showKeywordBridges ? edges : edges.filter((e) => e.type !== 'keyword');
   graph.setData(nodes, filtered, catColors, categories);
   graph.setActive(currentId);
@@ -681,6 +724,9 @@ function renderLegend() {
     .join('');
   legend.innerHTML = cats +
     '<div class="legend-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' +
+    `<span class="legend-dot" style="background:transparent;border:1.5px dashed #7a82a8"></span>` +
+    `ghost (unresolved link, click to create)</div>` +
+    '<div class="legend-row">' +
     `<label style="display:flex;align-items:center;gap:6px;cursor:pointer">` +
     `<input type="checkbox" id="kw-bridge-toggle"${showKeywordBridges ? ' checked' : ''}>` +
     `<span style="width:18px;border-top:2px dashed #bb9af7;display:inline-block"></span>keyword bridges (≥2 shared)</label></div>` +
@@ -697,6 +743,147 @@ function renderLegend() {
       modeBtn.textContent = graph.is2D ? '3D mode' : '2D mode';
     });
   }
+}
+
+// ---- Backlinks & unlinked mentions (FR-D) ----------------------------------
+// Spans of [[...]] / ![[...]] in a body, used to keep unlinked-mention
+// matching from firing inside an existing link/embed.
+function linkSpansOf(content) {
+  const spans = [];
+  const re = /!?\[\[([^\]]+)\]\]/g;
+  let m;
+  while ((m = re.exec(content))) spans.push([m.index, m.index + m[0].length]);
+  return spans;
+}
+
+// First plain-text (non-bracketed) occurrence of `term` in `content`, or -1.
+function firstPlainOccurrence(content, term) {
+  if (!term) return -1;
+  const spans = linkSpansOf(content);
+  const re = new RegExp(escRe(term), 'ig');
+  let m;
+  while ((m = re.exec(content))) {
+    if (!spans.some(([s, e]) => m.index >= s && m.index < e)) return m.index;
+  }
+  return -1;
+}
+
+function lineAround(content, idx) {
+  const before = content.slice(0, idx);
+  const lineStart = before.lastIndexOf('\n') + 1;
+  const nlIdx = content.indexOf('\n', idx);
+  const lineEnd = nlIdx === -1 ? content.length : nlIdx;
+  return content.slice(lineStart, lineEnd).trim();
+}
+
+// Lines in note `n`'s body containing a real [[title]] link (not ![[embed]]).
+function linkedLinesIn(n, title) {
+  const target = title.trim().toLowerCase();
+  const hits = [];
+  for (const line of n.content.split('\n')) {
+    const re = /(!?)\[\[([^\]]+)\]\]/g;
+    let m;
+    while ((m = re.exec(line))) {
+      if (m[1] === '!') continue;
+      if (m[2].trim().toLowerCase() === target) { hits.push(line.trim()); break; }
+    }
+  }
+  return hits;
+}
+
+function toggleMentions(kind) {
+  const listEl = $(kind + '-mentions-list');
+  const arrowEl = $(kind + '-mentions-arrow');
+  const collapsed = listEl.classList.toggle('collapsed');
+  arrowEl.textContent = collapsed ? '▸' : '▾';
+}
+$('linked-mentions-head').addEventListener('click', () => toggleMentions('linked'));
+$('unlinked-mentions-head').addEventListener('click', () => toggleMentions('unlinked'));
+
+function renderMentions(note) {
+  const linkedList = $('linked-mentions-list');
+  const unlinkedList = $('unlinked-mentions-list');
+  if (!note) {
+    linkedList.innerHTML = '';
+    unlinkedList.innerHTML = '';
+    $('linked-count').textContent = '0';
+    $('unlinked-count').textContent = '0';
+    return;
+  }
+
+  const linked = [];
+  const unlinked = [];
+  for (const n of notes) {
+    if (n.id === note.id) continue;
+    const lines = linkedLinesIn(n, note.title);
+    if (lines.length) linked.push({ note: n, line: lines[0] });
+    const idx = firstPlainOccurrence(n.content, note.title);
+    if (idx !== -1) unlinked.push({ note: n, snippet: lineAround(n.content, idx) });
+  }
+
+  $('linked-count').textContent = linked.length;
+  $('unlinked-count').textContent = unlinked.length;
+
+  linkedList.innerHTML = '';
+  if (!linked.length) {
+    linkedList.innerHTML = '<div class="mention-empty">No notes link here yet.</div>';
+  } else {
+    for (const { note: n, line } of linked) {
+      const row = document.createElement('div');
+      row.className = 'mention-row';
+      row.innerHTML =
+        `<span class="mention-title">${escHtml(n.title)}</span>` +
+        `<span class="mention-cat">${escHtml(prettify(n.category))}</span>` +
+        `<span class="mention-snippet">${escHtml(line)}</span>`;
+      row.onclick = () => openNote(n.id);
+      linkedList.appendChild(row);
+    }
+  }
+
+  unlinkedList.innerHTML = '';
+  if (!unlinked.length) {
+    unlinkedList.innerHTML = '<div class="mention-empty">No unlinked mentions found.</div>';
+  } else {
+    for (const { note: n, snippet } of unlinked) {
+      const row = document.createElement('div');
+      row.className = 'mention-row';
+      row.innerHTML =
+        `<span class="mention-title">${escHtml(n.title)}</span>` +
+        `<span class="mention-cat">${escHtml(prettify(n.category))}</span>` +
+        `<span class="mention-snippet">${escHtml(snippet)}</span>`;
+      const btn = document.createElement('button');
+      btn.className = 'mention-link-btn';
+      btn.textContent = 'Link';
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        await linkUnlinkedMention(note.title, n.id);
+      };
+      row.appendChild(btn);
+      row.onclick = () => openNote(n.id);
+      unlinkedList.appendChild(row);
+    }
+  }
+}
+
+function refreshMentions() {
+  renderMentions(currentId ? notes.find((n) => n.id === currentId) : null);
+}
+
+// Wraps the first plain-text occurrence of `targetTitle` in note `noteId`
+// into a [[link]] and saves that note (D.2).
+async function linkUnlinkedMention(targetTitle, noteId) {
+  const n = notes.find((x) => x.id === noteId);
+  if (!n) return;
+  const idx = firstPlainOccurrence(n.content, targetTitle);
+  if (idx === -1) return;
+  const newContent = n.content.slice(0, idx) + `[[${targetTitle}]]` + n.content.slice(idx + targetTitle.length);
+  n.content = newContent;
+  const res = await window.api.saveNote(n.id, newContent, n.theme, n.subtheme, n.date);
+  n.keywords = (res && res.keywords) || [];
+  if (currentId === n.id) { editor.value = newContent; renderPreview(); }
+  await refresh();
+  refreshMentions();
+  if (graph) updateGraph();
 }
 
 // ---- Tabs -----------------------------------------------------------------
@@ -720,17 +907,18 @@ $('tab-graph').onclick = () => switchTab('graph');
 $('tab-posts').onclick = () => switchTab('posts');
 
 // ---- Modal helper ---------------------------------------------------------
-function modal({ title, withSelect, options, placeholder }) {
+function modal({ title, withSelect, options, placeholder, initialText, initialSelect }) {
   return new Promise((resolve) => {
     const m = $('modal');
     $('modal-title').textContent = title;
     const input = $('modal-input');
     const select = $('modal-select');
-    input.value = '';
+    input.value = initialText || '';
     input.placeholder = placeholder || '';
     if (withSelect) {
       select.classList.remove('hidden');
       select.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
+      if (initialSelect && options.some((o) => o.value === initialSelect)) select.value = initialSelect;
     } else {
       select.classList.add('hidden');
     }
@@ -800,12 +988,19 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function linkResolves(title) {
+  const t = title.trim().toLowerCase();
+  return notes.some((n) => n.title.toLowerCase() === t || n.slug.toLowerCase() === t);
+}
+
 function renderInline(raw) {
   let s = escHtml(raw);
   s = s.replace(/!\[\[([^\]]+)\]\]/g, (_, f) =>
     `<img src="vault:///${f}" class="md-img" alt="${f}">`);
-  s = s.replace(/\[\[([^\]]+)\]\]/g, (_, t) =>
-    `<span class="wikilink" data-title="${t}">${t}</span>`);
+  s = s.replace(/\[\[([^\]]+)\]\]/g, (_, t) => {
+    const cls = linkResolves(t) ? 'wikilink' : 'wikilink wikilink-ghost';
+    return `<span class="${cls}" data-title="${t}">${t}</span>`;
+  });
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
   s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
   s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
@@ -1004,7 +1199,14 @@ window.addEventListener('resize', () => {
 });
 
 (async function init() {
-  graph = new GraphView($('graph-canvas'), (id) => openNote(id));
+  graph = new GraphView($('graph-canvas'), (id) => {
+    if (typeof id === 'string' && id.startsWith('ghost:')) {
+      const g = ghostIndex.get(id);
+      if (g) createFromUnresolvedLink(g.title, g.category);
+      return;
+    }
+    openNote(id);
+  });
   await refresh();
   const first = notes[0];
   if (first) openNote(first.id);
