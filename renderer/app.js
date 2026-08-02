@@ -87,6 +87,41 @@ function searchForTag(tag) {
   setSearchQuery('#' + tag);
 }
 
+// ---- Sidebar collapse + sort persistence (FR-H.1/H.2) ----------------------
+const COLLAPSE_KEY = 'gd-collapsed-v1';
+const SORT_KEY = 'gd-sort-v1'; // 'az' | 'newest' — default 'az' (§H.2)
+let collapsedSet = new Set();
+try { collapsedSet = new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]')); } catch { /* corrupt/missing */ }
+let sortMode = localStorage.getItem(SORT_KEY) === 'newest' ? 'newest' : 'az';
+
+function isCollapsed(kind, id) { return collapsedSet.has(kind + ':' + id); }
+function toggleCollapse(kind, id) {
+  const k = kind + ':' + id;
+  if (collapsedSet.has(k)) collapsedSet.delete(k); else collapsedSet.add(k);
+  localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedSet]));
+}
+function noteComparator(a, b) {
+  if (sortMode === 'newest') return String(b.date || '').localeCompare(String(a.date || ''));
+  return a.title.localeCompare(b.title);
+}
+function setSortMode(mode) {
+  sortMode = mode;
+  localStorage.setItem(SORT_KEY, mode);
+  $('sort-az-btn').classList.toggle('active', mode === 'az');
+  $('sort-newest-btn').classList.toggle('active', mode === 'newest');
+  renderTree();
+}
+$('sort-az-btn').addEventListener('click', () => setSortMode('az'));
+$('sort-newest-btn').addEventListener('click', () => setSortMode('newest'));
+// reflect the persisted mode on the buttons at load (renderTree hasn't run yet, that's fine)
+$('sort-az-btn').classList.toggle('active', sortMode === 'az');
+$('sort-newest-btn').classList.toggle('active', sortMode === 'newest');
+
+function collapseHead(el, arrowMarkup, collapsed, onToggle) {
+  el.innerHTML = `<span class="collapse-arrow">${collapsed ? '▸' : '▾'}</span>${arrowMarkup}`;
+  el.addEventListener('click', onToggle);
+}
+
 function renderTree() {
   if (searchQuery) { renderSearchResults(searchQuery); return; }
   tree.innerHTML = '';
@@ -95,15 +130,20 @@ function renderTree() {
   for (const year of years) {
     const yearGroup = document.createElement('div');
     yearGroup.className = 'year-group';
+    const yCollapsed = isCollapsed('year', year);
     const yhead = document.createElement('div');
     yhead.className = 'year-head';
-    yhead.textContent = '📅 ' + year;
+    collapseHead(yhead, '📅 ' + escHtml(year), yCollapsed, () => { toggleCollapse('year', year); renderTree(); });
     yearGroup.appendChild(yhead);
+
+    const yearBody = document.createElement('div');
+    yearBody.className = 'year-body' + (yCollapsed ? ' hidden' : '');
+    yearGroup.appendChild(yearBody);
 
     const yearNotes = notes.filter((n) => yearOf(n) === year);
     for (const cat of categories) {
       const catNotes = yearNotes.filter((n) => n.category === cat);
-      if (catNotes.length) renderCategory(yearGroup, cat, catNotes);
+      if (catNotes.length) renderCategory(yearBody, cat, catNotes);
     }
     tree.appendChild(yearGroup);
   }
@@ -117,14 +157,24 @@ function renderCategory(parent, cat, catNotesUnsorted) {
     makeDropZone(group, (id) =>
       id.startsWith(cat + '/') ? null : window.api.moveNote(id, cat));
 
+    const catCollapsed = isCollapsed('cat', cat);
     const head = document.createElement('div');
     head.className = 'cat-head';
-    head.innerHTML = `<span class="cat-dot" style="background:${colorFor(cat)}"></span>${prettify(cat)}`;
+    collapseHead(
+      head,
+      `<span class="cat-dot" style="background:${colorFor(cat)}"></span>${escHtml(prettify(cat))}`,
+      catCollapsed,
+      () => { toggleCollapse('cat', cat); renderTree(); },
+    );
     group.appendChild(head);
 
-    const catNotes = [...catNotesUnsorted].sort((a, b) => a.title.localeCompare(b.title));
+    const body = document.createElement('div');
+    body.className = 'cat-body' + (catCollapsed ? ' hidden' : '');
+    group.appendChild(body);
 
-    const addItem = (n, cls) => {
+    const catNotes = [...catNotesUnsorted].sort(noteComparator);
+
+    const addItem = (into, n, cls) => {
       const item = document.createElement('div');
       item.className = 'note-item' + (cls ? ' ' + cls : '') +
         (n.id === currentId ? ' active' : '');
@@ -138,34 +188,41 @@ function renderCategory(parent, cat, catNotesUnsorted) {
         item.classList.add('dragging');
       });
       item.addEventListener('dragend', () => item.classList.remove('dragging'));
-      group.appendChild(item);
+      into.appendChild(item);
     };
-    const addHead = (cls, text, resolver) => {
+    const addHead = (into, cls, kind, key, text, resolver) => {
+      const collapsed = isCollapsed(kind, key);
       const h = document.createElement('div');
       h.className = cls;
-      h.textContent = text;
+      collapseHead(h, escHtml(text), collapsed, () => { toggleCollapse(kind, key); renderTree(); });
       if (resolver) makeDropZone(h, resolver);
-      group.appendChild(h);
+      into.appendChild(h);
+      const bodyEl = document.createElement('div');
+      bodyEl.className = cls.replace('-head', '-body') + (collapsed ? ' hidden' : '');
+      into.appendChild(bodyEl);
+      return bodyEl;
     };
 
     // notes with no theme listed directly under the category
-    for (const n of catNotes.filter((n) => !n.theme)) addItem(n, '');
+    for (const n of catNotes.filter((n) => !n.theme)) addItem(body, n, '');
 
     // theme sub-group → sub-theme sub-sub-group → notes
     const themes = [...new Set(catNotes.map((n) => n.theme).filter(Boolean))].sort();
     for (const th of themes) {
       // drop on a theme → set this category + theme, clear sub-theme
-      addHead('theme-head', th, (id) => window.api.reclassifyNote(id, cat, th, ''));
+      const themeBody = addHead(body, 'theme-head', 'theme', cat + '|' + th, th,
+        (id) => window.api.reclassifyNote(id, cat, th, ''));
       const themeNotes = catNotes.filter((n) => n.theme === th);
       // notes in this theme with no sub-theme
-      for (const n of themeNotes.filter((n) => !n.subtheme)) addItem(n, 'themed');
+      for (const n of themeNotes.filter((n) => !n.subtheme)) addItem(themeBody, n, 'themed');
       // then a sub-sub-group per sub-theme
       const subs = [...new Set(themeNotes.map((n) => n.subtheme).filter(Boolean))].sort();
       for (const sub of subs) {
         // drop on a sub-theme → set this category + theme + sub-theme
-        addHead('subtheme-head', sub, (id) => window.api.reclassifyNote(id, cat, th, sub));
+        const subBody = addHead(themeBody, 'subtheme-head', 'subtheme', cat + '|' + th + '|' + sub, sub,
+          (id) => window.api.reclassifyNote(id, cat, th, sub));
         for (const n of themeNotes.filter((n) => n.subtheme === sub)) {
-          addItem(n, 'subthemed');
+          addItem(subBody, n, 'subthemed');
         }
       }
     }
@@ -399,6 +456,16 @@ document.addEventListener('keydown', (e) => {
   if (meta && (e.key === 'o' || e.key === 'O' || e.key === 'p' || e.key === 'P')) {
     e.preventDefault();
     openQuickSwitcher();
+  } else if (meta && (e.key === 'e' || e.key === 'E')) {
+    // Cmd+E toggles between the editor and graph tabs (§H.3)
+    e.preventDefault();
+    const graphActive = $('tab-graph').classList.contains('active');
+    switchTab(graphActive ? 'editor' : 'graph');
+  } else if (meta && (e.key === 'f' || e.key === 'F')) {
+    // Cmd+F focuses the sidebar search input (§H.3)
+    e.preventDefault();
+    $('search-input').focus();
+    $('search-input').select();
   }
 });
 
@@ -1329,6 +1396,36 @@ $('backup-btn').onclick = async () => {
   }
 };
 
+// ---- External-change watching (FR-I) ---------------------------------------
+// main notifies us (debounced ~500ms) when files change on disk outside the
+// app (e.g. the vault edited directly in Obsidian). Reload, but never clobber
+// an unsaved edit in the currently open note (§I.2).
+async function handleVaultChanged() {
+  const openId = currentId;
+  const wasDirty = dirty;
+  const preserved = wasDirty ? editor.value : null;
+
+  await refresh();
+
+  if (!openId) return;
+  const note = notes.find((n) => n.id === openId);
+  if (!note) return; // note removed/moved externally — leave the editor as-is
+
+  if (wasDirty) {
+    note.content = preserved; // keep the unsaved edit authoritative in memory
+    if (currentId === openId) {
+      editor.value = preserved;
+      saveState.textContent = 'changed on disk — your version kept';
+    }
+  } else if (currentId === openId) {
+    // nothing unsaved to protect — reflect the external edit
+    editor.value = note.content;
+    renderKeywords(note.keywords);
+    renderPreview();
+    refreshMentions();
+  }
+}
+
 // ---- Init -----------------------------------------------------------------
 window.addEventListener('resize', () => {
   if (graph) graph.resize();
@@ -1349,4 +1446,5 @@ window.addEventListener('resize', () => {
   const vp = await window.api.vaultPath();
   $('vault-path').textContent = vp;
   $('vault-path').title = vp;
+  if (window.api.onVaultChanged) window.api.onVaultChanged(() => handleVaultChanged());
 })();

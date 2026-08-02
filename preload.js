@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('attachment:save', { category, data, filename, mimeType }),
   convertHeic: (data) =>
     ipcRenderer.invoke('attachment:convert-heic', { data }),
+  onVaultChanged: (cb) => ipcRenderer.on('vault:changed', () => cb()),
 });

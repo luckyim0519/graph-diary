@@ -24,6 +24,25 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  return win;
+}
+
+// ---- External-change watching (FR-I) ---------------------------------------
+// fs.watch on the vault, debounced ~500ms, tells the renderer to refresh().
+// The renderer decides what to do with a dirty open note (never clobber it —
+// §I.2); this side only needs to notify, not diff.
+function setupVaultWatcher(win) {
+  let debounceTimer = null;
+  try {
+    fs.watch(VAULT, { recursive: true }, () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (!win.isDestroyed()) win.webContents.send('vault:changed');
+      }, 500);
+    });
+  } catch (err) {
+    console.error('[graph-diary] vault watch unavailable:', err);
+  }
 }
 
 // ---- Vault helpers --------------------------------------------------------
@@ -668,7 +687,8 @@ app.whenReady().then(async () => {
 
   await ensureVault();
   console.error('[graph-diary] vault ready at', VAULT);
-  createWindow();
+  const win = createWindow();
+  setupVaultWatcher(win);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

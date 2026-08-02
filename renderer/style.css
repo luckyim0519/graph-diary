@@ -56,7 +56,39 @@ html, body {
 }
 .sidebar-search input:focus { border-color: var(--accent); }
 
+/* ---- Sort toggle (FR-H.2) ---- */
+.sidebar-sort {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px 10px;
+}
+.sort-label { font-size: 11px; color: var(--text-dim); }
+.sort-switch {
+  display: flex;
+  gap: 2px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.sort-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sort-btn:hover { background: var(--panel-2); color: var(--text); }
+.sort-btn.active { background: var(--panel-2); color: var(--text); }
+
 #tree { flex: 1; overflow-y: auto; padding: 0 8px 16px; }
+
+/* ---- Collapsible sidebar headers (FR-H.1) ---- */
+.collapse-arrow { font-size: 9px; display: inline-block; width: 10px; opacity: 0.8; }
+.year-body.hidden, .cat-body.hidden, .theme-body.hidden, .subtheme-body.hidden { display: none; }
 
 /* ---- Tags section (FR-F) ---- */
 #tags-section { padding: 8px 16px 10px; border-top: 1px solid var(--border); }
@@ -325,6 +357,7 @@ html, body {
   color: var(--accent);
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
+  cursor: pointer;
 }
 
 .theme-field { display: flex; align-items: center; gap: 6px; }
@@ -349,15 +382,19 @@ html, body {
   display: flex;
   align-items: center;
   gap: 5px;
+  cursor: pointer;
 }
 .theme-head::before { content: "🏷"; font-size: 9px; }
+.theme-head:hover { color: var(--text); }
 .subtheme-head {
   font-size: 10px;
   color: var(--text-dim);
   opacity: 0.8;
   padding: 2px 8px 2px 38px;
+  cursor: pointer;
 }
 .subtheme-head::before { content: "↳ "; }
+.subtheme-head:hover { color: var(--text); opacity: 1; }
 .note-item.themed { padding-left: 38px; }
 .note-item.subthemed { padding-left: 52px; }
 
