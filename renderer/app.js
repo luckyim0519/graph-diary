@@ -41,7 +41,50 @@ async function refresh() {
   categories.forEach(colorFor);
   renderTree();
   refreshThemeList();
+  refreshTagList();
   if (graph) updateGraph();
+}
+
+// ---- Tags (FR-F) ------------------------------------------------------------
+// Body-derived only — never written to frontmatter (§F.4). Korean+English
+// word chars; "#word" mid-line is a tag, "# " (with a space) is a heading —
+// the heading regex in markdownToHtml already requires that space, so no
+// special-casing is needed here.
+const TAG_RE = /#([A-Za-z0-9가-힣_][A-Za-z0-9가-힣_-]*)/g;
+
+function extractTags(content) {
+  const stripped = content.replace(/```[\s\S]*?```/g, ''); // ignore tags inside code fences
+  const tags = new Set();
+  let m;
+  TAG_RE.lastIndex = 0;
+  while ((m = TAG_RE.exec(stripped))) tags.add(m[1]);
+  return [...tags];
+}
+
+function refreshTagList() {
+  const counts = new Map();
+  for (const n of notes) {
+    for (const t of extractTags(n.content)) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const box = $('tags-list');
+  if (!sorted.length) {
+    box.innerHTML = '<span class="tags-empty">no tags yet</span>';
+    return;
+  }
+  box.innerHTML = sorted
+    .map(([t, c]) => `<span class="tag-chip-sidebar" data-tag="${escHtml(t)}">#${escHtml(t)} <span class="tag-count">${c}</span></span>`)
+    .join('');
+  for (const el of box.querySelectorAll('.tag-chip-sidebar')) {
+    el.addEventListener('click', () => searchForTag(el.dataset.tag));
+  }
+}
+
+// Clicking a tag (in the sidebar list or the preview) runs a search that
+// matches tags only, reusing FR-A's search (F.2/F.3).
+function searchForTag(tag) {
+  $('search-input').value = '#' + tag;
+  setSearchQuery('#' + tag);
 }
 
 function renderTree() {
@@ -208,12 +251,20 @@ function searchNotes(query) {
     const themeL = (n.theme || '').toLowerCase();
     const subthemeL = (n.subtheme || '').toLowerCase();
     const catL = (n.category || '').toLowerCase();
+    const tagsL = extractTags(n.content).map((t) => t.toLowerCase());
     const haystack = `${titleL} ${bodyL} ${kwL} ${themeL} ${subthemeL} ${catL}`;
-    if (!terms.every((t) => haystack.includes(t))) continue;
-    // best-first: title match > keyword match > body match
+
+    // A "#tag" term (F.2) matches tags only, not the general haystack.
+    const matchesTerm = (t) => (t.startsWith('#') && t.length > 1)
+      ? tagsL.includes(t.slice(1))
+      : haystack.includes(t);
+    if (!terms.every(matchesTerm)) continue;
+
+    // best-first: title match > keyword/tag match > body match
     let score = 1;
-    if (terms.some((t) => kwL.includes(t))) score = 2;
-    if (terms.some((t) => titleL.includes(t))) score = 3;
+    if (terms.some((t) => !t.startsWith('#') && kwL.includes(t))) score = 2;
+    if (terms.some((t) => t.startsWith('#') && tagsL.includes(t.slice(1)))) score = 2;
+    if (terms.some((t) => !t.startsWith('#') && titleL.includes(t))) score = 3;
     results.push({ note: n, score, snippet: buildSnippet(n.content, terms) });
   }
   results.sort((a, b) => b.score - a.score || a.note.title.localeCompare(b.note.title));
@@ -436,6 +487,7 @@ async function saveCurrent() {
   } else {
     renderTree();
     refreshThemeList();
+    refreshTagList();
     if (graph) updateGraph();
   }
   refreshMentions();
@@ -993,8 +1045,23 @@ function linkResolves(title) {
   return notes.some((n) => n.title.toLowerCase() === t || n.slug.toLowerCase() === t);
 }
 
+// Wraps #tag tokens in a span, skipping any that fall inside a [[...]] or
+// ![[...]] span so a wiki-link title containing "#" is never corrupted by an
+// injected tag <span> before the link/embed regexes run.
+function tagTokenize(escapedLine) {
+  const spans = [];
+  const linkRe = /!?\[\[([^\]]+)\]\]/g;
+  let lm;
+  while ((lm = linkRe.exec(escapedLine))) spans.push([lm.index, lm.index + lm[0].length]);
+  const within = (idx) => spans.some(([s, e]) => idx >= s && idx < e);
+  TAG_RE.lastIndex = 0;
+  return escapedLine.replace(TAG_RE, (m, t, offset) =>
+    within(offset) ? m : `<span class="tag-token" data-tag="${t}">#${t}</span>`);
+}
+
 function renderInline(raw) {
   let s = escHtml(raw);
+  s = tagTokenize(s);
   s = s.replace(/!\[\[([^\]]+)\]\]/g, (_, f) =>
     `<img src="vault:///${f}" class="md-img" alt="${f}">`);
   s = s.replace(/\[\[([^\]]+)\]\]/g, (_, t) => {
@@ -1011,29 +1078,92 @@ function markdownToHtml(text) {
   const lines = text.split('\n');
   const out = [];
   let listType = null;
+  let inQuote = false;
+  let inCode = false;
+  let codeLines = [];
   const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
-  for (const line of lines) {
+  const closeQuote = () => { if (inQuote) { out.push('</blockquote>'); inQuote = false; } };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // fenced code block (```lang ... ```) — content is escaped only, never
+    // run through renderInline, so nothing inside can be misread as markdown
+    if (/^```/.test(line.trim())) {
+      if (!inCode) { closeList(); closeQuote(); inCode = true; codeLines = []; }
+      else { inCode = false; out.push(`<pre><code>${escHtml(codeLines.join('\n'))}</code></pre>`); }
+      continue;
+    }
+    if (inCode) { codeLines.push(line); continue; }
+
     const hm = line.match(/^(#{1,6}) (.+)/);
     if (hm) {
-      closeList();
+      closeList(); closeQuote();
       const lv = hm[1].length;
       out.push(`<h${lv}>${renderInline(hm[2])}</h${lv}>`);
-    } else if (/^[-*] /.test(line)) {
+      continue;
+    }
+    if (/^-{3,}\s*$/.test(line.trim())) {
+      closeList(); closeQuote();
+      out.push('<hr>');
+      continue;
+    }
+    const qm = line.match(/^>\s?(.*)$/);
+    if (qm) {
+      closeList();
+      if (!inQuote) { out.push('<blockquote>'); inQuote = true; }
+      out.push(`<p>${renderInline(qm[1])}</p>`);
+      continue;
+    }
+    closeQuote();
+    const tm = line.match(/^[-*] \[([ xX])\] (.*)$/);
+    if (tm) {
+      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+      const checked = tm[1].toLowerCase() === 'x';
+      out.push(`<li class="task-item${checked ? ' done' : ''}"><input type="checkbox" class="task-checkbox" data-line="${i}"${checked ? ' checked' : ''}>${renderInline(tm[2])}</li>`);
+      continue;
+    }
+    if (/^[-*] /.test(line)) {
       if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
       out.push(`<li>${renderInline(line.slice(2))}</li>`);
-    } else if (/^\d+\. /.test(line)) {
+      continue;
+    }
+    if (/^\d+\. /.test(line)) {
       if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
       out.push(`<li>${renderInline(line.replace(/^\d+\.\s+/, ''))}</li>`);
-    } else if (line.trim() === '') {
+      continue;
+    }
+    if (line.trim() === '') {
       closeList();
       out.push('<div class="md-spacer"></div>');
-    } else {
-      closeList();
-      out.push(`<p>${renderInline(line)}</p>`);
+      continue;
     }
+    closeList();
+    out.push(`<p>${renderInline(line)}</p>`);
   }
+  if (inCode) out.push(`<pre><code>${escHtml(codeLines.join('\n'))}</code></pre>`); // unterminated fence
   closeList();
+  closeQuote();
   return out.join('');
+}
+
+// Toggles a `- [ ]` / `- [x]` task line at `lineIdx` in the current note's
+// source and saves (G.1 — manual diary state, not habit tracking).
+function toggleTaskCheckbox(lineIdx) {
+  if (!currentId) return;
+  const lines = editor.value.split('\n');
+  const line = lines[lineIdx];
+  if (line === undefined) return;
+  const m = line.match(/^([-*] \[)([ xX])(\].*)$/);
+  if (!m) return;
+  const newChar = m[2].toLowerCase() === 'x' ? ' ' : 'x';
+  lines[lineIdx] = m[1] + newChar + m[3];
+  editor.value = lines.join('\n');
+  const note = notes.find((n) => n.id === currentId);
+  if (note) note.content = editor.value;
+  dirty = true;
+  clearTimeout(saveTimer);
+  saveCurrent();
 }
 
 function renderPreview() {
@@ -1042,6 +1172,12 @@ function renderPreview() {
   pane.innerHTML = markdownToHtml(editor.value);
   for (const el of pane.querySelectorAll('.wikilink')) {
     el.addEventListener('click', () => followLink(el.dataset.title));
+  }
+  for (const el of pane.querySelectorAll('.tag-token')) {
+    el.addEventListener('click', () => searchForTag(el.dataset.tag));
+  }
+  for (const el of pane.querySelectorAll('.task-checkbox')) {
+    el.addEventListener('click', () => toggleTaskCheckbox(parseInt(el.dataset.line, 10)));
   }
 }
 
