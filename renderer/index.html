@@ -17,6 +17,9 @@
           <button id="new-note-btn" title="New note">+ Note</button>
           <button id="new-cat-btn" title="New category">+ Category</button>
         </div>
+        <div class="sidebar-search">
+          <input id="search-input" type="text" placeholder="🔍 Search notes… (Cmd+F)" />
+        </div>
         <div id="tree"></div>
         <div class="sidebar-foot">
           <span id="vault-path" title=""></span>
@@ -125,6 +128,15 @@
           <button id="modal-cancel">Cancel</button>
           <button id="modal-ok" class="primary">OK</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Quick switcher (Cmd+O / Cmd+P) -->
+    <div id="quick-switcher" class="hidden">
+      <div id="qs-scrim"></div>
+      <div class="qs-box">
+        <input id="qs-input" type="text" placeholder="Jump to note…" />
+        <div id="qs-results"></div>
       </div>
     </div>
 

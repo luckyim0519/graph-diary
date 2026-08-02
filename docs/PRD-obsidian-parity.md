@@ -1,10 +1,16 @@
 # PRD — Graph Diary v3: Obsidian-Parity Core
 
-- **Status:** ✅ Approved — ready for implementation.
+- **Status:** 🔄 In progress — see implementation log below.
 - **Author:** Claude (manager mode), for luckyim
 - **Date:** 2026-08-01
 - **Scope:** `graph-diary` Electron app (this repo, `/Users/luckyim/Desktop/projects/notes`)
 - **Audience:** the implementing agent. Self-contained; read `AGENTS.md` first, then this. §1 describes the as-built code — do not re-derive it.
+
+## Implementation log
+
+| Milestone | Status | Notes |
+|---|---|---|
+| OP-1 — FR-A search + FR-B quick switcher | ✅ | Search input in sidebar (`renderer/app.js` `searchNotes`/`renderSearchResults`), debounced 150ms, AND-matches title/body/keywords/theme/subtheme/category, best-first scoring, `<mark>` snippet highlight, Esc restores tree. Quick switcher modal (`#quick-switcher`) on Cmd+O/Cmd+P, arrow-key nav, Enter opens, "Create…" row when no title matches. Verified against `/tmp/gd-parity-test` via CDP-driven Playwright: Korean term `커피` found the note with highlighted snippet, Esc restored the tree, Cmd+O/Cmd+P filtered and opened/created notes. |
 
 ---
 

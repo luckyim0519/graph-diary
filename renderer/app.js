@@ -45,6 +45,7 @@ async function refresh() {
 }
 
 function renderTree() {
+  if (searchQuery) { renderSearchResults(searchQuery); return; }
   tree.innerHTML = '';
   // Top level = year (newest first), then category → theme → sub-theme.
   const years = [...new Set(notes.map(yearOf))].sort().reverse();
@@ -160,6 +161,195 @@ function makeDropZone(el, resolver) {
     openNote(newId);
   });
 }
+
+// ---- Search (FR-A) ---------------------------------------------------------
+let searchQuery = '';
+let searchTimer = null;
+
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Builds a one-line snippet around the first matched term, HTML-escaped with
+// <mark> highlights (escape happens before highlighting so query text can
+// never inject markup).
+function buildSnippet(content, terms) {
+  const plain = content.replace(/^#\s+.+$/m, '').trim().replace(/\s+/g, ' ');
+  const lower = plain.toLowerCase();
+  let idx = -1;
+  for (const t of terms) {
+    const i = lower.indexOf(t);
+    if (i !== -1 && (idx === -1 || i < idx)) idx = i;
+  }
+  if (idx === -1) idx = 0;
+  const start = Math.max(0, idx - 30);
+  const end = Math.min(plain.length, idx + 70);
+  let snippet = plain.slice(start, end);
+  if (start > 0) snippet = '…' + snippet;
+  if (end < plain.length) snippet += '…';
+  let esc = escHtml(snippet);
+  for (const t of terms) {
+    if (!t) continue;
+    esc = esc.replace(new RegExp('(' + escRe(t) + ')', 'ig'), '<mark>$1</mark>');
+  }
+  return esc;
+}
+
+// In-memory search over the loaded notes array (A.4 — no index, no libs).
+// Multiple space-separated terms AND together; matches title/body/keywords/
+// theme/subtheme/category, case-insensitive, Korean+English safe (plain
+// substring matching needs no word-boundary regex for Hangul).
+function searchNotes(query) {
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  const results = [];
+  for (const n of notes) {
+    const titleL = n.title.toLowerCase();
+    const bodyL = n.content.toLowerCase();
+    const kwL = (n.keywords || []).join(' ').toLowerCase();
+    const themeL = (n.theme || '').toLowerCase();
+    const subthemeL = (n.subtheme || '').toLowerCase();
+    const catL = (n.category || '').toLowerCase();
+    const haystack = `${titleL} ${bodyL} ${kwL} ${themeL} ${subthemeL} ${catL}`;
+    if (!terms.every((t) => haystack.includes(t))) continue;
+    // best-first: title match > keyword match > body match
+    let score = 1;
+    if (terms.some((t) => kwL.includes(t))) score = 2;
+    if (terms.some((t) => titleL.includes(t))) score = 3;
+    results.push({ note: n, score, snippet: buildSnippet(n.content, terms) });
+  }
+  results.sort((a, b) => b.score - a.score || a.note.title.localeCompare(b.note.title));
+  return results;
+}
+
+function renderSearchResults(query) {
+  tree.innerHTML = '';
+  const results = searchNotes(query);
+  if (!results.length) {
+    const empty = document.createElement('div');
+    empty.className = 'search-empty';
+    empty.textContent = 'No matches';
+    tree.appendChild(empty);
+    return;
+  }
+  for (const r of results) {
+    const row = document.createElement('div');
+    row.className = 'search-result-item' + (r.note.id === currentId ? ' active' : '');
+    const color = colorFor(r.note.category);
+    row.innerHTML =
+      `<div class="sr-top"><span class="sr-title">${escHtml(r.note.title)}</span>` +
+      `<span class="sr-cat" style="background:${color}22;color:${color}">${escHtml(prettify(r.note.category))}</span></div>` +
+      `<div class="sr-snippet">${r.snippet}</div>`;
+    row.onclick = () => openNote(r.note.id);
+    tree.appendChild(row);
+  }
+}
+
+function setSearchQuery(q) {
+  searchQuery = q;
+  renderTree();
+}
+
+$('search-input').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => setSearchQuery($('search-input').value.trim()), 150);
+});
+$('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    $('search-input').value = '';
+    clearTimeout(searchTimer);
+    setSearchQuery('');
+    $('search-input').blur();
+  }
+});
+
+// ---- Quick switcher (FR-B, Cmd+O / Cmd+P) ----------------------------------
+let qsMatches = [];
+let qsIndex = 0;
+
+function openQuickSwitcher() {
+  $('quick-switcher').classList.remove('hidden');
+  $('qs-input').value = '';
+  qsMatches = recentNotesForQs();
+  qsIndex = 0;
+  renderQsResults();
+  setTimeout(() => $('qs-input').focus(), 20);
+}
+function closeQuickSwitcher() {
+  $('quick-switcher').classList.add('hidden');
+}
+function recentNotesForQs() {
+  return [...notes]
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, 10)
+    .map((n) => ({ note: n }));
+}
+function computeQsMatches(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return recentNotesForQs();
+  const matches = notes
+    .filter((n) => n.title.toLowerCase().includes(q))
+    .slice(0, 10)
+    .map((n) => ({ note: n }));
+  if (matches.length) return matches;
+  return [{ create: true, title: query.trim() }];
+}
+function renderQsResults() {
+  const box = $('qs-results');
+  box.innerHTML = '';
+  qsMatches.forEach((m, i) => {
+    const el = document.createElement('div');
+    el.className = 'qs-item' + (i === qsIndex ? ' sel' : '') + (m.create ? ' create' : '');
+    if (m.create) {
+      el.innerHTML = `+ Create “${escHtml(m.title)}”`;
+    } else {
+      el.innerHTML = `<span>${escHtml(m.note.title)}</span><span class="qs-cat">${escHtml(prettify(m.note.category))}</span>`;
+    }
+    el.onmousedown = (e) => { e.preventDefault(); chooseQs(i); };
+    box.appendChild(el);
+  });
+}
+async function chooseQs(i) {
+  const m = qsMatches[i];
+  if (!m) return;
+  if (m.create) {
+    const note = notes.find((n) => n.id === currentId);
+    const cat = note ? note.category : (categories[0] || 'notes');
+    const id = await window.api.createNote(cat, m.title);
+    await refresh();
+    closeQuickSwitcher();
+    openNote(id);
+    return;
+  }
+  closeQuickSwitcher();
+  openNote(m.note.id);
+}
+$('qs-input').addEventListener('input', () => {
+  qsMatches = computeQsMatches($('qs-input').value);
+  qsIndex = 0;
+  renderQsResults();
+});
+$('qs-input').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (qsMatches.length) { qsIndex = (qsIndex + 1) % qsMatches.length; renderQsResults(); }
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (qsMatches.length) { qsIndex = (qsIndex - 1 + qsMatches.length) % qsMatches.length; renderQsResults(); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    chooseQs(qsIndex);
+  } else if (e.key === 'Escape') {
+    closeQuickSwitcher();
+  }
+});
+$('qs-scrim').addEventListener('click', closeQuickSwitcher);
+
+document.addEventListener('keydown', (e) => {
+  const meta = e.metaKey || e.ctrlKey;
+  if (meta && (e.key === 'o' || e.key === 'O' || e.key === 'p' || e.key === 'P')) {
+    e.preventDefault();
+    openQuickSwitcher();
+  }
+});
 
 // ---- Editor ---------------------------------------------------------------
 async function openNote(id) {
