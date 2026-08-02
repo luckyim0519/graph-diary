@@ -1,10 +1,26 @@
 # PRD — Graph Diary v2: Link-First Graph & Photo Attachments
 
-- **Status:** ✅ Approved — ready for implementation. All open questions resolved (§8).
+- **Status:** 🔄 Partially implemented — see implementation log below.
 - **Author:** Claude (manager mode), for luckyim
-- **Date:** 2026-07-07
+- **Date:** 2026-07-07 (status updated same day, post-implementation)
 - **Scope:** `graph-diary` Electron app (this repo)
 - **Audience:** the implementing agent. This document is self-contained; read AGENTS.md first, then this. Do not re-open decided questions — §8 records the user's final answers.
+
+## Implementation log (as of commit `f165016`)
+
+| Milestone | Status | Notes |
+|---|---|---|
+| M1 — graph fix (FR-1.1/1.2/1.5, FR-4.3) | ✅ commit `3428c39` | Cross-category link edges, keyword-bridge toggle (≥2 kw, default off), spring tuning, HSL palette extension |
+| M5 — backup (FR-5) | ✅ commit `3428c39` | `backup:run` IPC + sidebar button + `backup.js` CLI (`npm run backup`) |
+| M2.1 — photo pipeline (FR-2, all) | ✅ commit `701a307` | `vault://` protocol, `attachment:save`, paste/drag-drop, `_assets/`, HEIC→JPEG, keyword-extractor embed stripping |
+| M3.1 — markdown preview (FR-3) | ✅ commit `f165016` | **Built as an always-visible split-pane (VS Code style) instead of the FR-3.1 Write/Read toggle — accepted deviation, FR-3.1 is superseded** (see note under FR-3) |
+| M2.2 — Mood removal (FR-7) | ❌ **not done** | Spun out into `docs/PRD-posts-view.md` |
+| M2.3 — Posts view (FR-8) | ❌ **not done** | Spun out into `docs/PRD-posts-view.md` |
+| M1.b — graph 2D mode + styling (FR-6) | ❌ not done | FR-6 was specced after the M1 commit landed; still owed |
+| M3 remainder — backlinks (FR-1.6), ghost nodes (FR-1.3), collapsible sidebar (FR-4.2) | ❌ not done | |
+| M4 — polish | ❌ not done | |
+
+**Next up:** FR-7 + FR-8, specced in detail against the as-built code in **`docs/PRD-posts-view.md`** — implement from that document. FR-6 and the M3 remainder stay specced here.
 
 ---
 
@@ -16,7 +32,7 @@
 | Bridge | `preload.js` | `window.api.*` wrappers over IPC. |
 | UI shell | `renderer/app.js` | Sidebar tree (year → category → theme → sub-theme), textarea editor with `[[link]]` autocomplete and cmd-click follow, debounced + sync-on-close save, drag & drop reclassify. |
 | Graph | `renderer/graph.js` | Dependency-free 3D force graph. Cluster anchors nested year → category → theme → sub-theme. |
-| Mood | `renderer/mood.js` | Mood-over-time canvas chart. |
+| Mood | `renderer/mood.js` | Mood-over-time canvas chart. **⚠ Scheduled for removal in M2 (FR-7), replaced by the Posts view (FR-8).** |
 
 **Non-negotiable constraint (AGENTS.md):** the vault is irreplaceable personal data. Every change in this PRD must be additive or migrate-in-place. No delete/re-seed, ever. Any migration step must be preceded by a timestamped `cp -R` backup.
 
@@ -49,6 +65,7 @@ The vault already supports arbitrary category folders, but seeds, docs and demos
 2. **G2 — Photos in every entry:** paste or drag a photo into a note; it is stored inside the vault, embedded in the markdown, and rendered in the app.
 3. **G3 — Scale to many categories:** UI, graph and storage behave sensibly at ~20 categories / ~1,000 notes / ~2,000 photos.
 4. **G4 — Stay local, private, plain-files:** everything remains readable Markdown + ordinary image files on disk (openable in Obsidian itself if the user ever migrates). No cloud, no databases, no new heavyweight dependencies.
+5. **G5 — Diary as a feed:** re-reading entries should feel like scrolling a private Instagram — every entry a pretty post card with its photos (FR-8), replacing the removed mood analytics as the app's "reflection" surface.
 
 ### Non-goals (this release)
 - Full WYSIWYG markdown editor (bold/tables rendering while typing).
@@ -85,6 +102,7 @@ The vault already supports arbitrary category folders, but seeds, docs and demos
 | FR-2.5 | Deleting a note (soft-delete to `.trash`) does **not** delete its images. Orphaned images are never auto-deleted (vault rule). *(A manual "orphaned attachments" report is a Could.)* |
 | FR-2.6 | Keyword extraction and title extraction must ignore embed syntax (don't tokenize filenames into keywords). |
 | FR-2.7 | Accepted types: png, jpg/jpeg, gif, webp. **HEIC (iPhone photos) is converted to JPEG on import** (user-approved decision): decode in the renderer via a canvas/`createImageBitmap` path if Chromium supports the codec, else use `nativeImage` in main; write only the resulting `.jpg` to `_assets/` — never store the original HEIC in the vault. Reasonable size guard (warn > ~20 MB), never silently drop. |
+| FR-2.8 | **Photos are part of the backup.** Because photos live inside the vault (`vault/<cat>/_assets/`), every FR-5 snapshot to the Seagate drive automatically includes them — no separate photo-backup path exists or is needed. FR-5.4's verification (file counts + bytes) therefore covers images too. The implementing agent must confirm in the M5 acceptance run that `_assets/` files appear in the snapshot. |
 
 ### FR-3: Rendering photos in the editor (Must — minimum viable form)
 
@@ -92,7 +110,7 @@ The textarea cannot show images. Chosen approach (see §5.2 for alternatives):
 
 | ID | Requirement |
 |---|---|
-| FR-3.1 | Add a **Preview toggle** to the editor view (`✎ Write / 👁 Read`, keyboard `⌘E`). Read mode renders the note's markdown — at minimum: headings, paragraphs, lists, `[[links]]` (clickable), and images. Write mode stays the current textarea. **Notes open in write (edit) mode by default** (user-approved decision). |
+| FR-3.1 | ~~Preview toggle (`✎ Write / 👁 Read`, ⌘E)~~ **Superseded by the as-built implementation (commit `f165016`):** a live **split-pane** — textarea on the left, read-only rendered preview on the right, always visible, with a draggable divider. The user made this change and accepted it; do not convert it back to a toggle. The renderer (`markdownToHtml`/`renderInline` in `renderer/app.js`) covers headings, lists, bold/italic/code, clickable `[[links]]`, and `![[images]]` via `vault://`. |
 | FR-3.2 | Rendering is done with a small local renderer (either a ~50-line subset renderer in-repo, or `marked` vendored locally — no CDN, CSP stays `'self'`). All output sanitized (no raw HTML pass-through). |
 | FR-3.3 | In **write mode**, an image embed line shows a subtle affordance (e.g. 📷 gutter mark or thumbnail strip under the meta bar) so the user knows photos are attached without leaving write mode. *(Should.)* |
 
@@ -117,6 +135,40 @@ The textarea cannot show images. Chosen approach (see §5.2 for alternatives):
 | FR-5.4 | Verification is part of the backup: after copy, compare recursive file counts (and total bytes) of source vault vs snapshot vault; a mismatch marks the backup failed and says so loudly. |
 | FR-5.5 | Snapshot pruning is **manual only** (the user deletes old folders in Finder if the disk ever fills; 3.6 TB ≫ vault size, so not a near-term concern). The app never deletes anything on the backup drive. |
 | FR-5.6 | CLI parity: `npm run backup` runs the same logic headlessly, so backups don't require opening the app. *(Should.)* |
+
+### FR-6: Graph presentation — 2D mode + prettier Obsidian-style rendering (Must)
+
+| ID | Requirement |
+|---|---|
+| FR-6.1 | **2D / 3D toggle** in the graph view (button next to the legend, remember last choice per session). 3D stays the existing orbit-camera mode; 2D is a flat force layout (drag pans, scroll zooms, no auto-rotate) — same nodes/edges/data, only projection and interaction change. Implementation hint: the existing engine already works in 3D coordinates; 2D = clamp z to 0, skip pitch/yaw, add pan offset. |
+| FR-6.2 | **Obsidian-like node styling** in both modes: soft-glow circles (subtle radial gradient or shadow halo), node size scales with degree (already true — keep), labels hidden until zoomed in or hovered (fade in/out, no pop), hover highlights the node + its neighbors and dims the rest (already true — keep and smooth with a short transition). |
+| FR-6.3 | Edge styling: thin, low-alpha curves or lines that brighten on hover; link edges use neighbor-color blend or neutral light gray (Obsidian style) rather than pure category color. Keyword-bridge edges (when toggled on) stay dashed purple to remain distinguishable. |
+| FR-6.4 | Keep it dependency-free canvas rendering — no d3/three.js. Target 60 fps at ~1,000 nodes in 2D; 3D may degrade gracefully (cap physics iterations, not correctness). |
+
+### FR-7: Remove the Mood analysis feature (Must)
+
+The mood/emotion analysis (Ollama + lexicon scoring, mood tab, mood-over-time chart) is **removed** — user decision; its tab slot is taken by the Posts view (FR-8).
+
+| ID | Requirement |
+|---|---|
+| FR-7.1 | Delete from `main.js`: `analyzeMood`, `ollamaMood`, `lexiconMood`, `ollamaReachable`, cue/lexicon tables, and the `moods:analyze` + `ollama:status` IPC handlers. Delete `renderer/mood.js`, the Mood tab, and all mood UI/summary code in `app.js` / `index.html` / `style.css`. Remove the matching `preload.js` bridges. |
+| FR-7.2 | Stop **writing** `mood:` / `emotions:` fields on save. But `parseFrontmatter` must stay **tolerant** of those fields in existing vault files (parse-and-ignore). **Never bulk-rewrite vault files to strip old fields** — old headers are harmless and the vault is untouchable; they disappear naturally per-file on the user's next normal save. |
+| FR-7.3 | Keyword extraction is **not** part of this removal — keywords power autocomplete, the keyword-bridge toggle, and Posts hashtags (FR-8.3). Keep it. |
+
+### FR-8: "Posts" view — one pretty Instagram-style post per diary entry (Must)
+
+A new reading experience: every diary entry rendered as a polished social-style card, so re-reading the diary feels like scrolling a private Instagram feed. Fully local — images via the `vault://` protocol, no external fonts/CDNs (CSP stays `'self'`).
+
+| ID | Requirement |
+|---|---|
+| FR-8.1 | New tab `▦ Posts` replacing the Mood tab: a vertically scrolling feed of post cards, **newest first** (by `date`), with category filter chips across the top (multi-select; chip uses the category's graph color). |
+| FR-8.2 | **Card template** (the "pretty" part): cover photo on top (first image embed in the note, edge-to-edge, rounded corners) → header row (category chip + date, e.g. `2026년 7월 7일`) → title → body text rendered with the FR-3.2 markdown renderer, clamped to ~6 lines with a "더 보기 / more" expander → footer hashtag row. Clean card on the dark theme: elevated background, soft shadow, generous padding. |
+| FR-8.3 | Footer hashtags: the note's auto-keywords rendered as `#키워드` chips; theme/sub-theme also shown as chips when set. |
+| FR-8.4 | **No-photo fallback:** entries without images still get a good-looking card — a soft gradient banner derived from the category color with the date large, so text-only entries don't look broken in the feed. |
+| FR-8.5 | Multiple photos in one entry: cover = first image, remaining images as a small thumbnail row under the body; tapping any image shows it full-size (lightbox overlay, Esc/click to close). *(Carousel swipe is a Could.)* |
+| FR-8.6 | Clicking the card's title (or an "✎ edit" affordance) opens that note in the editor. In-feed `[[links]]` are clickable and navigate to the target note's editor. |
+| FR-8.7 | Feed performance: render lazily (IntersectionObserver or simple windowing) so 1,000 entries with photos scroll smoothly; never decode all images up front. |
+| FR-8.8 | **Grid mode:** an Instagram-profile-style square photo grid as a second mode of the Posts tab (⊞/☰ segmented switch), plus a binding "minimal Instagram" design language (Instagram + VSCO + Medium references). **Full spec lives in `docs/PRD-posts-view.md` §B.0/§B.3.5 — that document is authoritative for FR-8.** |
 
 ---
 
@@ -165,20 +217,22 @@ node types:
 
 ## 6. Milestones
 
-**M1 — Graph fix (small, immediate)**
-Remove same-category restriction; demote keyword edges behind toggle with ≥2-keyword threshold; tune spring constants; extended color palette.
-*Acceptance:* create note A in category X linking `[[B]]` in category Y → solid edge appears; with toggle off, two unlinked notes sharing one keyword show no edge.
+**M1 — Graph fix + presentation (FR-1, FR-6)**
+Remove same-category restriction; demote keyword edges behind toggle with ≥2-keyword threshold; tune spring constants; extended color palette; **2D/3D toggle; Obsidian-style node/edge styling** (glow, label fade, hover dim).
+*Acceptance:* create note A in category X linking `[[B]]` in category Y → solid edge appears; with toggle off, two unlinked notes sharing one keyword show no edge; 2D mode pans/zooms flat with the same data; labels fade in on zoom/hover.
 
-**M2 — Photo pipeline (the core of this PRD)**
-`vault://` protocol + CSP; `attachment:save` IPC; paste & drag-drop in editor; `_assets/` storage (+ scanner skip for `_`-dirs); HEIC→JPEG conversion; embed insertion; keyword extractor ignores embeds.
-*Acceptance:* paste a screenshot → file appears in `vault/<cat>/_assets/`, note gains `![[…]]`, no keyword pollution; import a HEIC → a `.jpg` lands in `_assets/` and renders; restart app → nothing lost; `_assets` never appears as a category in the sidebar.
+**M2 — Photo pipeline + Posts view + Mood removal (FR-2, FR-7, FR-8 — the core of this PRD)**
+1. *Pipeline:* `vault://` protocol + CSP; `attachment:save` IPC; paste & drag-drop in editor; `_assets/` storage (+ scanner skip for `_`-dirs); HEIC→JPEG conversion; embed insertion; keyword extractor ignores embeds.
+2. *Mood removal (FR-7):* delete mood engine/tab/chart/IPC; keep frontmatter parser tolerant of old `mood:`/`emotions:` fields; **no bulk rewrite of vault files**.
+3. *Posts view (FR-8):* `▦ Posts` tab in the freed slot — Instagram-style cards (cover photo, category chip, date, title, clamped body, `#keyword` hashtags), category filter chips, no-photo gradient fallback, lightbox, lazy rendering. Requires a first cut of the FR-3.2 markdown renderer (built here, reused by M3's Read toggle).
+*Acceptance:* paste a screenshot → file appears in `vault/<cat>/_assets/`, note gains `![[…]]`, no keyword pollution; import a HEIC → a `.jpg` lands in `_assets/` and renders; drag-drop an image file works the same as paste; restart app → nothing lost; `_assets` never appears as a category in the sidebar; Posts tab shows every entry as a card, newest first, photos render, photo-less entries get the gradient card, clicking a card's title opens the editor; the Mood tab and all Ollama/lexicon mood code are gone; an old note with `mood:` in its header still loads cleanly.
 
-**M3 — Reading & navigation**
-Write/Read toggle with renderer (images, clickable `[[links]]`, headings/lists); backlinks panel; ghost nodes; collapsible sidebar.
+**M3 — Reading & navigation (FR-3, remaining FR-1 items)**
+Write/Read toggle reusing the M2 renderer (images, clickable `[[links]]`, headings/lists); backlinks panel; ghost nodes; collapsible sidebar.
 *Acceptance:* Read mode shows the photo inline and clicking a `[[link]]` navigates; backlinks panel lists inbound links.
 
 **M4 — Scale & polish (as needed)**
-Quick-switcher, thumbnail strip in write mode, orphaned-attachment report.
+Quick-switcher, thumbnail strip in write mode, orphaned-attachment report, Posts carousel swipe.
 
 **M5 — Backup button (FR-5; small, can be done any time, even before M1)**
 `backup:run` IPC + sidebar button + `npm run backup`; additive timestamped snapshots to `/Volumes/Seagate/graph-diary-backups/` with file-count verification.
@@ -202,6 +256,10 @@ Each milestone ships independently; M1 alone already fixes the user's stated com
 2. **Keyword bridges:** default **OFF**, behind the legend toggle, ≥2 shared keywords when on (accepted as proposed).
 3. **HEIC:** **convert to JPEG on import**; only the `.jpg` is stored in the vault (FR-2.7).
 4. **Default view:** notes open in **write (edit) mode**; Read mode is opt-in via toggle / ⌘E (FR-3.1).
+5. **Photos in backups:** confirmed in scope — photos live in the vault, so FR-5 snapshots include them; made explicit in FR-2.8.
+6. **Graph:** keep 3D but add a **2D mode toggle**, and restyle nodes/edges to look like Obsidian ("prettier design") — FR-6.
+7. **Mood feature: removed entirely** (Ollama/lexicon analysis, Mood tab, chart) — FR-7. Old `mood:` header fields stay in files, parsed and ignored.
+8. **Posts view:** each diary entry gets an **Instagram-style post card** in a new `▦ Posts` tab (photo cover, date, category chip, hashtags) — FR-8, scheduled in M2.
 
 ## 9. Handoff checklist for the implementing agent
 
