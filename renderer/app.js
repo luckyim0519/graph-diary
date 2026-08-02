@@ -421,10 +421,22 @@ async function saveCurrent() {
   note.title = m ? m[1].trim() : note.slug;
   noteTitle.textContent = note.title;
   dirty = false;
-  saveState.textContent = 'saved ✓';
-  renderTree();
-  refreshThemeList();
-  if (graph) updateGraph();
+  if (res && res.ambiguous) {
+    saveState.textContent = 'saved ✓ · rename ambiguous, links not updated';
+  } else if (res && res.linksUpdated) {
+    saveState.textContent = `saved ✓ · ${res.linksUpdated} link${res.linksUpdated === 1 ? '' : 's'} updated`;
+  } else {
+    saveState.textContent = 'saved ✓';
+  }
+  if (res && res.linksUpdated) {
+    // other notes' bodies changed on disk (link rewrite) — reload before
+    // re-rendering anything derived from note content
+    await refresh();
+  } else {
+    renderTree();
+    refreshThemeList();
+    if (graph) updateGraph();
+  }
 }
 
 // Last line of defence: if the window is closing with unsaved text,

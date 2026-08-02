@@ -250,6 +250,113 @@ function extractTitle(content) {
   return m ? m[1].trim() : null;
 }
 
+// Synchronous twin of listNotes() — needed because rename-link rewriting must
+// run inside the synchronous 'note:save-sync' handler (fired on window close,
+// where we can't await promises before setting e.returnValue).
+function listNotesSync() {
+  const notes = [];
+  if (!fs.existsSync(VAULT)) return notes;
+  const cats = fs.readdirSync(VAULT, { withFileTypes: true });
+  for (const cat of cats) {
+    if (!cat.isDirectory() || cat.name.startsWith('.') || cat.name.startsWith('_')) continue;
+    const dir = path.join(VAULT, cat.name);
+    const files = fs.readdirSync(dir, { withFileTypes: true });
+    for (const f of files) {
+      if (!f.isFile() || !f.name.endsWith('.md')) continue;
+      const full = path.join(dir, f.name);
+      const raw = fs.readFileSync(full, 'utf8');
+      const { meta, body } = parseFrontmatter(raw);
+      const slug = f.name.replace(/\.md$/, '');
+      let date = meta.date;
+      if (!date) {
+        const st = fs.statSync(full);
+        date = st.mtime.toISOString().slice(0, 10);
+      }
+      notes.push({
+        id: `${cat.name}/${f.name}`,
+        category: cat.name,
+        slug,
+        title: extractTitle(body) || slug,
+        content: body,
+        keywords: meta.keywords || [],
+        theme: meta.theme || '',
+        subtheme: meta.subtheme || '',
+        date,
+      });
+    }
+  }
+  return notes;
+}
+
+// ---- Rename-safe links (FR-C) ----------------------------------------------
+// When a save changes a note's first-# title, every OTHER note's [[old title]]
+// links get rewritten to [[new title]]. ![[embed]] syntax is never touched.
+// Conservative by design: ambiguous renames (collision with another note's
+// title) are skipped outright, and every write is temp-file + rename (atomic).
+
+let renameBackupTaken = false; // one vault snapshot per running session is enough (§C.2)
+
+// cp -R vault -> vault/.trash/rename-backup-<timestamp>/, one-time per session.
+// Node's fs.cp refuses to copy a directory into its own subdirectory, so we
+// copy each top-level entry individually and skip .trash itself (rewrites
+// never touch already-trashed notes, so nothing of value is left unbacked-up).
+function snapshotVaultForRename() {
+  if (renameBackupTaken) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dest = path.join(VAULT, '.trash', `rename-backup-${stamp}`);
+  fs.mkdirSync(dest, { recursive: true });
+  const entries = fs.readdirSync(VAULT, { withFileTypes: true });
+  for (const e of entries) {
+    if (e.name === '.trash') continue;
+    fs.cpSync(path.join(VAULT, e.name), path.join(dest, e.name), { recursive: true });
+  }
+  renameBackupTaken = true;
+}
+
+// Rewrites [[oldTitle]] -> [[newTitle]] in a body, case-insensitive, exact
+// title match only (not substring), skipping ![[embed]] occurrences.
+// Returns the number of individual link occurrences rewritten (a body can
+// link the same note more than once).
+function rewriteLinksInBody(body, oldTitle, newTitle) {
+  const oldLower = oldTitle.trim().toLowerCase();
+  let count = 0;
+  const newBody = body.replace(/(!?)\[\[([^\]]+)\]\]/g, (m, bang, inner) => {
+    if (bang === '!') return m; // image embed, not a wiki-link
+    if (inner.trim().toLowerCase() !== oldLower) return m;
+    count++;
+    return `[[${newTitle}]]`;
+  });
+  return { newBody, count };
+}
+
+// Finds every other note linking [[oldTitle]] and rewrites it to [[newTitle]].
+// Skips (ambiguous) if newTitle collides with some other existing note's
+// title — never guess which one the user meant (§C.4).
+function renameLinksSync(oldTitle, newTitle, exceptId) {
+  const allNotes = listNotesSync();
+  const collision = allNotes.some(
+    (n) => n.id !== exceptId && n.title.trim().toLowerCase() === newTitle.trim().toLowerCase());
+  if (collision) return { updated: 0, ambiguous: true };
+
+  snapshotVaultForRename();
+
+  let updated = 0; // count of individual link occurrences rewritten
+  for (const n of allNotes) {
+    if (n.id === exceptId) continue;
+    const { newBody, count } = rewriteLinksInBody(n.content, oldTitle, newTitle);
+    if (!count) continue;
+    const full = path.join(VAULT, n.id);
+    const meta = existingMeta(full);
+    const composed = composeFile(newBody, meta);
+    // atomic write: temp file + rename, never touch the original in place
+    const tmp = `${full}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, composed, 'utf8');
+    fs.renameSync(tmp, full);
+    updated += count;
+  }
+  return { updated, ambiguous: false };
+}
+
 // ---- IPC ------------------------------------------------------------------
 
 ipcMain.handle('notes:list', () => listNotes());
@@ -272,29 +379,57 @@ function existingMeta(full) {
 }
 
 // Saving re-derives keywords from the body. The entry's date is preserved.
+// If the first-# title changed, other notes' [[old title]] links are
+// rewritten to [[new title]] (FR-C).
 ipcMain.handle('note:save', async (_e, { id, content, theme, subtheme, date }) => {
   const full = path.join(VAULT, id);
   const prev = existingMeta(full);
+  let prevBody = '';
+  try { prevBody = parseFrontmatter(fs.readFileSync(full, 'utf8')).body; } catch { /* new file */ }
+  const oldTitle = extractTitle(prevBody);
+  const newTitle = extractTitle(content);
+
   const keywords = extractKeywords(content);
   await fsp.writeFile(full, composeFile(content, {
     date: date || prev.date || today(), theme: theme || '', subtheme: subtheme || '',
     keywords,
   }), 'utf8');
-  return { keywords };
+
+  const result = { keywords };
+  if (oldTitle && newTitle && oldTitle.trim().toLowerCase() !== newTitle.trim().toLowerCase()) {
+    const rr = renameLinksSync(oldTitle, newTitle, id);
+    result.linksUpdated = rr.updated;
+    result.ambiguous = rr.ambiguous;
+  }
+  return result;
 });
 
 // Synchronous save — used when the window is closing, so the write completes
-// before the app exits and nothing typed is ever lost.
+// before the app exits and nothing typed is ever lost. Also runs the same
+// rename-link rewrite (synchronously) so a title change right before close
+// still propagates.
 ipcMain.on('note:save-sync', (e, { id, content, theme, subtheme, date }) => {
   try {
     const full = path.join(VAULT, id);
     const prev = existingMeta(full);
+    let prevBody = '';
+    try { prevBody = parseFrontmatter(fs.readFileSync(full, 'utf8')).body; } catch { /* new file */ }
+    const oldTitle = extractTitle(prevBody);
+    const newTitle = extractTitle(content);
+
     const keywords = extractKeywords(content);
     fs.writeFileSync(full, composeFile(content, {
       date: date || prev.date || today(), theme: theme || '', subtheme: subtheme || '',
       keywords,
     }), 'utf8');
-    e.returnValue = { ok: true };
+
+    const result = { ok: true, keywords };
+    if (oldTitle && newTitle && oldTitle.trim().toLowerCase() !== newTitle.trim().toLowerCase()) {
+      const rr = renameLinksSync(oldTitle, newTitle, id);
+      result.linksUpdated = rr.updated;
+      result.ambiguous = rr.ambiguous;
+    }
+    e.returnValue = result;
   } catch (err) {
     e.returnValue = { ok: false, error: String(err) };
   }
